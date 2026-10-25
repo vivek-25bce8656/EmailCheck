@@ -188,6 +188,7 @@ function downloadCSV() {
 """
 
 
+
 def check_email(email):
     if len(email) > 254 or not EMAIL_PATTERN.fullmatch(email):
         return ("Likely to bounce", "bad",
@@ -201,62 +202,41 @@ def check_email(email):
                 "The address format is invalid.")
 
     try:
-        records = dns.resolver.resolve(domain, "MX", lifetime=2)
-        servers = sorted(records, key=lambda r: r.preference)
+        records = dns.resolver.resolve(
+            domain, "MX", lifetime=2
+        )
+
+        if records:
+            return (
+                "Unknown", "unknown",
+                "The domain has mail servers, but mailbox "
+                "existence cannot be verified by DNS alone."
+            )
 
     except dns.resolver.NXDOMAIN:
-        return ("Likely to bounce", "bad",
-                "The email domain does not exist.")
+        return (
+            "Likely to bounce", "bad",
+            "The email domain does not exist."
+        )
 
     except dns.resolver.NoAnswer:
-        return ("Unknown", "unknown",
-                "No MX record was found; delivery is unconfirmed.")
+        return (
+            "Unknown", "unknown",
+            "No MX record was found; delivery is unconfirmed."
+        )
 
-    except (dns.exception.DNSException, OSError, ValueError):
-        return ("Unknown", "unknown",
-                "The DNS check failed or timed out.")
-
-    for record in servers[:2]:
-        server = str(record.exchange).rstrip(".")
-
-        try:
-            with smtplib.SMTP(server, 25, timeout=2) as smtp:
-                smtp.ehlo()
-                code, _ = smtp.mail("")
-
-                if code != 250:
-                    continue
-
-                code, reply = smtp.rcpt(email)
-                message = reply.decode(
-                    "utf-8", errors="replace"
-                ).lower()
-
-                if code in (250, 251):
-                    return (
-                        "Likely delivered", "good",
-                        "The server accepted the recipient check; "
-                        "actual delivery is not guaranteed."
-                    )
-
-                if code == 550 and any(term in message for term in (
-                    "5.1.1", "user unknown", "mailbox unavailable"
-                )):
-                    return (
-                        "Likely to bounce", "bad",
-                        "The server reported that the mailbox "
-                        "may not exist."
-                    )
-
-        except (smtplib.SMTPException, OSError, TimeoutError):
-            continue
+    except (
+        dns.exception.DNSException, OSError, ValueError
+    ):
+        return (
+            "Unknown", "unknown",
+            "The DNS check failed or timed out."
+        )
 
     return (
         "Unknown", "unknown",
-        "The server gave no conclusive result or the connection "
-        "was unavailable."
+        "The email address could not be verified."
     )
-
 
 @app.route("/", methods=["GET", "POST"])
 def home():

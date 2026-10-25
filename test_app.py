@@ -56,7 +56,9 @@ class EmailCheckTests(unittest.TestCase):
         self.assertEqual(status, "Unknown")
         self.assertIn("DNS check failed", reason)
 
-    def test_smtp_accepts_recipient(self):
+    
+
+    def test_domain_has_mx_but_mailbox_is_unverified(self):
         mx_record = type("MX", (), {
             "exchange": "mail.example.com.",
             "preference": 10
@@ -65,43 +67,14 @@ class EmailCheckTests(unittest.TestCase):
         with patch(
             "app.dns.resolver.resolve",
             return_value=[mx_record]
-        ), patch("app.smtplib.SMTP") as mock_smtp:
-
-            server = (
-                mock_smtp.return_value
-                .__enter__.return_value
-            )
-            server.mail.return_value = (250, b"OK")
-            server.rcpt.return_value = (250, b"OK")
-
-            status, css, reason = check_email(
-                "user@example.com"
-            )
-
-        self.assertEqual(status, "Likely delivered")
-        self.assertEqual(css, "good")
-        self.assertIn("not guaranteed", reason)
-
-    def test_smtp_unavailable(self):
-        mx_record = type("MX", (), {
-            "exchange": "mail.example.com.",
-            "preference": 10
-        })()
-
-        with patch(
-            "app.dns.resolver.resolve",
-            return_value=[mx_record]
-        ), patch(
-            "app.smtplib.SMTP",
-            side_effect=OSError("Connection failed")
         ):
-
             status, css, reason = check_email(
                 "user@example.com"
             )
 
         self.assertEqual(status, "Unknown")
         self.assertEqual(css, "unknown")
+        self.assertIn("mailbox", reason)
 
     def test_duplicate_addresses_are_deduplicated(self):
         response = self.client.post("/", data={
@@ -109,15 +82,13 @@ class EmailCheckTests(unittest.TestCase):
         })
 
         self.assertEqual(response.status_code, 200)
-
-        # The invalid-format reason should appear only once
-        # because duplicate addresses are removed.
         self.assertEqual(
             response.data.count(
                 b"The address format is invalid."
             ),
             1
         )
+
 
     def test_more_than_20_addresses(self):
         emails = "\n".join(
