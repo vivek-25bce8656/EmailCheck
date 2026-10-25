@@ -1,248 +1,87 @@
-
-from flask import Flask, request, render_template_string
-import re
-import smtplib
+﻿"""
+EmailCheck - Advanced Email Intelligence & DNS Verification Platform
+Production-grade Flask Web Application.
+"""
+import io
+import csv
+import time
+from datetime import datetime, timezone
+from flask import Flask, request, render_template, Response, make_response, jsonify
+from email_checker import (
+    assess_email,
+    aggregate_domain_insights,
+    sanitize_csv_value,
+    clear_dns_cache,
+    validate_email_syntax,
+    resolve_domain_mail_config,
+    STATUS_MAIL_CONFIG,
+    STATUS_NO_MX,
+    STATUS_DOMAIN_NOT_FOUND,
+    STATUS_INVALID_FORMAT,
+    STATUS_UNABLE_TO_VERIFY,
+    STATUS_UNKNOWN,
+    MAX_EMAIL_LENGTH,
+    MAX_LOCAL_LENGTH,
+    MAX_DOMAIN_LENGTH,
+    LOCAL_PART_PATTERN,
+)
 import dns.resolver
 import dns.exception
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+app = Flask(__name__, template_folder="templates", static_folder="static")
+
+# Production Limits & Config
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024  # 32 KB max upload
 MAX_EMAILS = 20
 MAX_INPUT_LENGTH = 12000
 
-EMAIL_PATTERN = re.compile(
-    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
-    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}"
-    r"[A-Za-z0-9])?)+$"
-)
-
-PAGE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EmailCheck | Email Assessment</title>
-<style>
-* { box-sizing: border-box; }
-body {
-    margin: 0; font-family: Arial, sans-serif;
-    background: #f1f5f9; color: #172033;
-}
-header {
-    background: #172554; color: white;
-    padding: 28px 16px; text-align: center;
-}
-header p { color: #dbeafe; }
-main { max-width: 1000px; margin: 28px auto; padding: 0 16px; }
-.panel {
-    background: white; padding: 22px; border-radius: 12px;
-    box-shadow: 0 3px 14px #0000000c; margin-bottom: 20px;
-}
-textarea {
-    width: 100%; min-height: 150px; padding: 12px;
-    border: 1px solid #cbd5e1; border-radius: 8px;
-    font: 15px Arial; resize: vertical;
-}
-button {
-    border: 0; border-radius: 8px; padding: 12px 18px;
-    cursor: pointer; font-size: 15px; margin: 8px 6px 0 0;
-}
-.primary { background: #2563eb; color: white; }
-.secondary { background: #e2e8f0; color: #172033; }
-button:disabled { opacity: .6; cursor: wait; }
-.notice { color: #475569; line-height: 1.6; font-size: 14px; }
-.stats { display: flex; gap: 12px; flex-wrap: wrap; }
-.stat {
-    flex: 1; min-width: 140px; padding: 16px;
-    border-radius: 8px; background: #eff6ff;
-}
-.stat strong { display: block; font-size: 26px; margin-top: 8px; }
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
-th, td {
-    text-align: left; padding: 12px 8px;
-    border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere;
-}
-th { background: #f8fafc; }
-.good { color: #166534; }
-.bad { color: #b91c1c; }
-.unknown { color: #92400e; }
-.status { font-weight: bold; }
-footer { text-align: center; color: #64748b; padding: 20px; }
-</style>
-</head>
-<body>
-<header>
-    <h1>EmailCheck</h1>
-    <p>Understand email address checks with transparent results.</p>
-</header>
-<main>
-    <section class="panel">
-        <h2>Check email addresses</h2>
-        <p>Enter up to 20 unique addresses, one per line.</p>
-        <form method="post" id="checkForm">
-            <textarea name="emails" required maxlength="12000"
-                placeholder="person@example.com&#10;another@example.org"
-            >{{ input_text }}</textarea>
-            <br>
-            <button class="primary" id="checkButton" type="submit">
-                Check addresses
-            </button>
-            <button class="secondary" type="button"
-                onclick="window.location.href='/'">Reset</button>
-            <span id="loading" role="status" aria-live="polite"></span>
-        </form>
-        <p class="notice">
-            Results are estimates, not delivery guarantees.
-            This tool does not send email messages. Use only addresses
-            you are authorized to assess.
-        </p>
-    </section>
-
-    {% if notice %}
-    <section class="panel notice" role="alert">{{ notice }}</section>
-    {% endif %}
-
-    {% if results %}
-    <section class="panel">
-        <h2>Assessment summary</h2>
-        <div class="stats">
-            <div class="stat">Unique addresses
-                <strong>{{ results|length }}</strong></div>
-            <div class="stat">Likely delivered
-                <strong>{{ good_count }}</strong></div>
-            <div class="stat">Likely to bounce
-                <strong>{{ bad_count }}</strong></div>
-            <div class="stat">Unknown
-                <strong>{{ unknown_count }}</strong></div>
-        </div>
-        <button class="primary" type="button" onclick="downloadCSV()">
-            Download CSV
-        </button>
-    </section>
-
-    <section class="panel">
-        <h2>Individual results</h2>
-        <div class="table-wrap">
-        <table id="resultsTable">
-            <thead><tr>
-                <th>Email address</th><th>Result</th><th>Reason</th>
-            </tr></thead>
-            <tbody>
-            {% for item in results %}
-            <tr>
-                <td>{{ item.email }}</td>
-                <td class="status {{ item.css }}">{{ item.status }}</td>
-                <td>{{ item.reason }}</td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
-    </section>
-    {% endif %}
-</main>
-<footer>EmailCheck | Transparent email assessment</footer>
-<script>
-const form = document.getElementById("checkForm");
-if (form) {
-    form.addEventListener("submit", function () {
-        document.getElementById("checkButton").disabled = true;
-        document.getElementById("loading").textContent =
-            " Checking addresses... Please wait.";
-    });
-}
-
-function downloadCSV() {
-    const table = document.getElementById("resultsTable");
-    if (!table) return;
-
-    const rows = Array.from(table.querySelectorAll("tr"));
-    const csv = rows.map(row =>
-        Array.from(row.querySelectorAll("th,td")).map(cell => {
-            let value = cell.innerText.replace(/"/g, '""');
-            if (/^[=+@\\-\\t\\r]/.test(value)) {
-                value = "'" + value;
-            }
-            return '"' + value + '"';
-        }).join(",")
-    ).join("\\r\\n");
-
-    const blob = new Blob(["\\ufeff" + csv], {
-        type: "text/csv;charset=utf-8;"
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "emailcheck-results.csv";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-</script>
-</body>
-</html>
-"""
+# Export regex pattern for backward compatibility
+EMAIL_PATTERN = LOCAL_PART_PATTERN
 
 
+def check_email(email: str):
+    """
+    Backward-compatible wrapper for email assessment.
+    Returns: (status, css, reason)
+    """
+    res = assess_email(email)
+    return res["status"], res["css"], res["reason"]
 
-def check_email(email):
-    if len(email) > 254 or not EMAIL_PATTERN.fullmatch(email):
-        return ("Likely to bounce", "bad",
-                "The address format is invalid.")
 
-    local, domain = email.rsplit("@", 1)
-
-    if (len(local) > 64 or ".." in local
-            or local.startswith(".") or local.endswith(".")):
-        return ("Likely to bounce", "bad",
-                "The address format is invalid.")
-
-    try:
-        records = dns.resolver.resolve(
-            domain, "MX", lifetime=2
-        )
-
-        if records:
-            return (
-                "Unknown", "unknown",
-                "The domain has mail servers, but mailbox "
-                "existence cannot be verified by DNS alone."
-            )
-
-    except dns.resolver.NXDOMAIN:
-        return (
-            "Likely to bounce", "bad",
-            "The email domain does not exist."
-        )
-
-    except dns.resolver.NoAnswer:
-        return (
-            "Unknown", "unknown",
-            "No MX record was found; delivery is unconfirmed."
-        )
-
-    except (
-        dns.exception.DNSException, OSError, ValueError
-    ):
-        return (
-            "Unknown", "unknown",
-            "The DNS check failed or timed out."
-        )
-
-    return (
-        "Unknown", "unknown",
-        "The email address could not be verified."
+@app.after_request
+def apply_security_headers(response):
+    """
+    Attach standard enterprise security headers to all HTTP responses.
+    """
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "magnetometer=(), microphone=(), payment=(), usb=()"
     )
+    # Content Security Policy allowing self, Google Fonts, and inline styling
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    return response
+
 
 @app.route("/", methods=["GET", "POST"])
 def home():
     input_text = ""
     results = []
+    domain_insights = []
     notice = ""
+    total_submitted = 0
+    unique_count = 0
+    execution_time = "0ms"
 
     if request.method == "POST":
         input_text = request.form.get("emails", "")
@@ -250,53 +89,151 @@ def home():
         if len(input_text) > MAX_INPUT_LENGTH:
             notice = "Input is too long. Please shorten your list."
         else:
-            raw_emails = [
+            raw_lines = [
                 line.strip()
                 for line in input_text.splitlines()
                 if line.strip()
             ]
+            total_submitted = len(raw_lines)
 
-            emails = list(dict.fromkeys(raw_emails))
+            # Deduplicate while strictly preserving insertion order
+            seen = set()
+            unique_emails = []
+            for email in raw_lines:
+                if email not in seen:
+                    seen.add(email)
+                    unique_emails.append(email)
 
-            if not emails:
+            unique_count = len(unique_emails)
+
+            if not unique_emails:
                 notice = "Please enter at least one email address."
-
-            elif len(emails) > MAX_EMAILS:
+            elif unique_count > MAX_EMAILS:
                 notice = (
-                    "Please submit no more than 20 unique "
+                    f"Please submit no more than {MAX_EMAILS} unique "
                     "email addresses at a time."
                 )
-
             else:
-                for email in emails:
-                    status, css, reason = check_email(email)
-                    results.append({
-                        "email": email,
-                        "status": status,
-                        "css": css,
-                        "reason": reason
-                    })
+                # Benchmark assessment performance
+                t_start = time.perf_counter()
 
-    return render_template_string(
-        PAGE,
+                for email in unique_emails:
+                    assessment = assess_email(email)
+                    results.append(assessment)
+
+                t_duration = time.perf_counter() - t_start
+                if t_duration < 1.0:
+                    execution_time = f"{int(t_duration * 1000)}ms"
+                else:
+                    execution_time = f"{t_duration:.2f}s"
+
+                domain_insights = aggregate_domain_insights(results)
+
+    # Compute category metrics
+    mail_config_count = sum(r["status"] == STATUS_MAIL_CONFIG for r in results)
+    no_mx_count = sum(r["status"] == STATUS_NO_MX for r in results)
+    domain_not_found_count = sum(r["status"] == STATUS_DOMAIN_NOT_FOUND for r in results)
+    invalid_format_count = sum(r["status"] == STATUS_INVALID_FORMAT for r in results)
+    unverified_count = sum(
+        r["status"] in (STATUS_UNABLE_TO_VERIFY, STATUS_UNKNOWN, STATUS_NO_MX)
+        for r in results
+    )
+
+    return render_template(
+        "index.html",
         input_text=input_text,
         results=results,
+        domain_insights=domain_insights,
         notice=notice,
-        good_count=sum(
-            r["status"] == "Likely delivered" for r in results
-        ),
-        bad_count=sum(
-            r["status"] == "Likely to bounce" for r in results
-        ),
-        unknown_count=sum(
-            r["status"] == "Unknown" for r in results
-        )
+        total_submitted=total_submitted,
+        unique_count=unique_count,
+        mail_config_count=mail_config_count,
+        no_mx_count=no_mx_count,
+        domain_not_found_count=domain_not_found_count,
+        invalid_format_count=invalid_format_count,
+        unverified_count=unverified_count,
+        execution_time=execution_time,
     )
 
 
+@app.route("/export-csv", methods=["POST"])
+def export_csv():
+    """
+    Generate and serve a CSV export with formula injection protection.
+    """
+    input_text = request.form.get("emails", "")
+    raw_lines = [line.strip() for line in input_text.splitlines() if line.strip()]
+
+    seen = set()
+    unique_emails = []
+    for email in raw_lines:
+        if email not in seen:
+            seen.add(email)
+            unique_emails.append(email)
+
+    if len(unique_emails) > MAX_EMAILS:
+        unique_emails = unique_emails[:MAX_EMAILS]
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+
+    # Header Row
+    writer.writerow([
+        "Email Address",
+        "Assessment Status",
+        "Domain",
+        "Reason / Evidence",
+        "Mail Servers",
+    ])
+
+    for email in unique_emails:
+        res = assess_email(email)
+        writer.writerow([
+            sanitize_csv_value(res["email"]),
+            sanitize_csv_value(res["status"]),
+            sanitize_csv_value(res["domain"]),
+            sanitize_csv_value(res["reason"]),
+            sanitize_csv_value(res["primary_mx"]),
+        ])
+
+    csv_data = "\ufeff" + output.getvalue()
+    filename = f"emailcheck_results_{datetime.now().strftime('%Y-%m-%d')}.csv"
+
+    response = Response(csv_data, mimetype="text/csv; charset=utf-8")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Application health endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "service": "EmailCheck",
+        "version": "2.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }), 200
+
+
 @app.errorhandler(413)
-def too_large(_error):
+def request_entity_too_large(_error):
     return "Input is too large. Please submit a smaller list.", 413
+
+
+@app.errorhandler(400)
+def bad_request(_error):
+    return "Bad Request. The server could not understand your submission.", 400
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return "The requested page or resource could not be found.", 404
+
+
+@app.errorhandler(500)
+def internal_server_error(_error):
+    return "An internal server error occurred. Please try again later.", 500
 
 
 if __name__ == "__main__":

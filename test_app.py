@@ -1,131 +1,410 @@
-
+﻿"""
+EmailCheck - Comprehensive Automated Test Suite
+Covers unit tests, RFC validation, mocked DNS, security headers,
+CSV injection shielding, IPv6 AAAA fallbacks, IDN, caching, and error handlers.
+"""
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+import time
 import dns.resolver
 import dns.exception
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, InternalServerError
 
 from app import app, check_email
+import email_checker
+from email_checker import (
+    validate_email_syntax,
+    resolve_domain_mail_config,
+    assess_email,
+    aggregate_domain_insights,
+    sanitize_csv_value,
+    clear_dns_cache,
+    get_dns_cache_size,
+    STATUS_MAIL_CONFIG,
+    STATUS_NO_MX,
+    STATUS_DOMAIN_NOT_FOUND,
+    STATUS_INVALID_FORMAT,
+    STATUS_UNABLE_TO_VERIFY,
+    _DNS_CACHE,
+    _DNS_CACHE_MAX_SIZE,
+)
 
 
-class EmailCheckTests(unittest.TestCase):
+class EmailCheckComprehensiveTests(unittest.TestCase):
 
     def setUp(self):
         app.config["TESTING"] = True
         self.client = app.test_client()
+        clear_dns_cache()
 
-    def test_web_page_loads(self):
+    def tearDown(self):
+        clear_dns_cache()
+
+    # 1. Web Page & Navigation
+    def test_homepage_loads_successfully(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"EmailCheck", response.data)
+        self.assertIn(b"Advanced Email Intelligence", response.data)
+        self.assertIn(b"Assess Addresses", response.data)
+        self.assertIn(b"Load Sample", response.data)
 
-    def test_invalid_address(self):
-        status, css, reason = check_email("invalid-address")
+    # 2. Security Headers
+    def test_security_headers_present(self):
+        response = self.client.get("/")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("Referrer-Policy"), "strict-origin-when-cross-origin")
+        self.assertIn("Content-Security-Policy", response.headers)
+        self.assertIn("default-src 'self'", response.headers.get("Content-Security-Policy"))
 
-        self.assertEqual(status, "Likely to bounce")
-        self.assertEqual(css, "bad")
-        self.assertIn("format is invalid", reason)
+    # 3. Valid Syntax Tests
+    def test_valid_email_syntax(self):
+        valid_emails = [
+            "user@example.com",
+            "first.last@company.org",
+            "developer+tag@github.com",
+            "test_user123@sub.domain.co.uk",
+        ]
+        for email in valid_emails:
+            is_valid, local, domain, reason = validate_email_syntax(email)
+            self.assertTrue(is_valid, f"Expected {email} to be valid: {reason}")
+            self.assertEqual(reason, "")
 
-    def test_missing_mx_record(self):
-        with patch(
-            "app.dns.resolver.resolve",
-            side_effect=dns.resolver.NoAnswer
-        ):
+    # 4. Invalid Syntax Tests & Edge Cases
+    def test_invalid_email_syntax_variations(self):
+        invalid_cases = [
+            ("missing-at-sign.com", "missing the '@' delimiter"),
+            ("user@sub@domain.com", "invalid"),
+            (".leadingdot@example.com", "cannot start or end with a period"),
+            ("trailingdot.@example.com", "cannot start or end with a period"),
+            ("consecutive..dots@example.com", "consecutive periods"),
+            ("@nodomain.com", "missing the local user portion"),
+            ("user@", "missing the domain portion"),
+            ("user@singlelabel", "Domain must contain at least a name and a top-level domain"),
+            ("user@-hyphenstart.com", "contains invalid characters or starts/ends with a hyphen"),
+            ("user@hyphenend-.com", "contains invalid characters or starts/ends with a hyphen"),
+            ("user@domain.123", "Top-level domain (TLD) is invalid or purely numeric"),
+            ("", "Empty or null address provided."),
+            ("user@[192.168.1.1]", "Domain literals (IP addresses in brackets) are not supported"),
+            ("bücher@domain.com", "Local mailbox portion contains non-ASCII characters"),
+        ]
+        for email, expected_reason_substr in invalid_cases:
+            is_valid, local, domain, reason = validate_email_syntax(email)
+            self.assertFalse(is_valid, f"Expected {email} to be invalid")
+            self.assertIn(expected_reason_substr.lower(), reason.lower())
+
+            status, css, explanation = check_email(email)
+            self.assertEqual(status, STATUS_INVALID_FORMAT)
+            self.assertIn(expected_reason_substr.lower(), explanation.lower())
+
+    def test_validate_syntax_non_string_types(self):
+        self.assertFalse(validate_email_syntax(None)[0])
+        self.assertFalse(validate_email_syntax(123)[0])
+        self.assertFalse(validate_email_syntax([])[0])
+
+    # 5. Length Constraints
+    def test_maximum_email_and_local_part_lengths(self):
+        # Local part > 64 chars
+        long_local = "a" * 65 + "@example.com"
+        is_valid, _, _, reason = validate_email_syntax(long_local)
+        self.assertFalse(is_valid)
+        self.assertIn("exceeds maximum length of 64", reason)
+
+        # Local part == 64 chars (valid syntax)
+        valid_local = "a" * 64 + "@example.com"
+        is_valid, _, _, _ = validate_email_syntax(valid_local)
+        self.assertTrue(is_valid)
+
+        # Total email > 254 chars
+        domain = "sub." + ("b" * 50) + "." + ("c" * 50) + "." + ("d" * 50) + "." + ("e" * 50) + ".com"
+        long_email = ("a" * 60) + "@" + domain
+        if len(long_email) > 254:
+            is_valid, _, _, reason = validate_email_syntax(long_email)
+            self.assertFalse(is_valid)
+            self.assertIn("exceeds maximum rfc length of 254", reason.lower())
+
+    # 6. IDN / Internationalized Domain Names (Punycode conversion)
+    def test_idn_punycode_domain_handling(self):
+        is_valid, local, domain, reason = validate_email_syntax("user@münchen.de")
+        self.assertTrue(is_valid, f"IDN conversion failed: {reason}")
+        self.assertEqual(domain, "xn--mnchen-3ya.de")
+
+    # 7. Duplicates & Whitespace
+    def test_duplicate_removal_preserving_order(self):
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            response = self.client.post("/", data={
+                "emails": "first@example.com\nsecond@example.com\nfirst@example.com\n  second@example.com  "
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"first@example.com", response.data)
+            self.assertIn(b"second@example.com", response.data)
+            self.assertIn(b"From 4 submitted lines", response.data)
+            self.assertIn(b"Showing 2 of 2", response.data)
+
+    def test_empty_and_whitespace_submissions(self):
+        response = self.client.post("/", data={"emails": "   \n\n   \t  \n"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Please enter at least one email address.", response.data)
+
+    # 8. Max Limit & Oversized Requests
+    def test_more_than_20_unique_addresses_rejected(self):
+        emails = "\n".join(f"user{i}@example.com" for i in range(21))
+        response = self.client.post("/", data={"emails": emails})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Please submit no more than 20 unique email addresses at a time.", response.data)
+
+    def test_oversized_text_rejected(self):
+        huge_input = "a@b.com\n" * 2000  # > 12000 chars
+        response = self.client.post("/", data={"emails": huge_input})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Input is too long. Please shorten your list.", response.data)
+
+    # 9. DNS MX Checks (Mocked)
+    def test_domain_with_valid_mx_records(self):
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
             status, css, reason = check_email("user@example.com")
+            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertEqual(css, "status-success")
+            self.assertIn("active mail exchange", reason)
 
-        self.assertEqual(status, "Unknown")
-        self.assertEqual(css, "unknown")
-        self.assertIn("No MX record", reason)
+    # 10. Fallback: A records & AAAA records (RFC 5321)
+    def test_domain_no_mx_fallback_to_a_record(self):
+        """RFC 5321 Fallback test: No MX, but IPv4 A record exists."""
+        def mock_dns_resolve(qname, rdtype, **kwargs):
+            if rdtype == "MX":
+                raise dns.resolver.NoAnswer()
+            elif rdtype == "A":
+                a_mock = MagicMock()
+                a_mock.__str__ = lambda x: "93.184.216.34"
+                return [a_mock]
+            raise dns.resolver.NXDOMAIN()
 
-    def test_nonexistent_domain(self):
-        with patch(
-            "app.dns.resolver.resolve",
-            side_effect=dns.resolver.NXDOMAIN
-        ):
-            status, css, reason = check_email("user@example.com")
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
+            status, css, reason = check_email("fallback@example.com")
+            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertIn("Implicit mail routing fallback", reason)
+            self.assertIn("93.184.216.34", reason)
 
-        self.assertEqual(status, "Likely to bounce")
-        self.assertIn("domain does not exist", reason)
+    def test_domain_no_mx_fallback_to_aaaa_record(self):
+        """RFC 5321 Fallback test: No MX, No A record, but IPv6 AAAA record exists."""
+        def mock_dns_resolve(qname, rdtype, **kwargs):
+            if rdtype in ("MX", "A"):
+                raise dns.resolver.NoAnswer()
+            elif rdtype == "AAAA":
+                aaaa_mock = MagicMock()
+                aaaa_mock.__str__ = lambda x: "2001:db8::1"
+                return [aaaa_mock]
+            raise dns.resolver.NXDOMAIN()
 
-    def test_dns_timeout(self):
-        with patch(
-            "app.dns.resolver.resolve",
-            side_effect=dns.exception.Timeout
-        ):
-            status, css, reason = check_email("user@example.com")
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
+            status, css, reason = check_email("ipv6@example.com")
+            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertIn("Implicit mail routing fallback", reason)
+            self.assertIn("2001:db8::1", reason)
 
-        self.assertEqual(status, "Unknown")
-        self.assertIn("DNS check failed", reason)
+    def test_domain_no_mx_and_no_a_or_aaaa_record(self):
+        def mock_dns_resolve(qname, rdtype, **kwargs):
+            raise dns.resolver.NoAnswer()
 
-    
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
+            status, css, reason = check_email("user@no-mx-no-a.com")
+            self.assertEqual(status, STATUS_NO_MX)
+            self.assertEqual(css, "status-warning")
+            self.assertIn("has no MX or fallback host records", reason)
 
-    def test_domain_has_mx_but_mailbox_is_unverified(self):
-        mx_record = type("MX", (), {
-            "exchange": "mail.example.com.",
-            "preference": 10
-        })()
+    def test_fallback_timeout_handling(self):
+        def mock_dns_resolve_a_timeout(qname, rdtype, **kwargs):
+            if rdtype == "MX":
+                raise dns.resolver.NoAnswer()
+            raise dns.exception.Timeout()
 
-        with patch(
-            "app.dns.resolver.resolve",
-            return_value=[mx_record]
-        ):
-            status, css, reason = check_email(
-                "user@example.com"
-            )
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve_a_timeout):
+            res = resolve_domain_mail_config("timeout-host.com")
+            self.assertEqual(res["status"], STATUS_UNABLE_TO_VERIFY)
+            self.assertIn("timed out", res["reason"].lower())
 
-        self.assertEqual(status, "Unknown")
-        self.assertEqual(css, "unknown")
-        self.assertIn("mailbox", reason)
+    def test_nonexistent_domain_nxdomain(self):
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            status, css, reason = check_email("user@nonexistent-domain.xyz")
+            self.assertEqual(status, STATUS_DOMAIN_NOT_FOUND)
+            self.assertEqual(css, "status-danger")
+            self.assertIn("does not exist in DNS", reason)
 
-    def test_duplicate_addresses_are_deduplicated(self):
-        response = self.client.post("/", data={
-            "emails": "invalid-address\ninvalid-address"
-        })
+    def test_dns_timeout_and_exceptions(self):
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            status, css, reason = check_email("user@timeout-domain.com")
+            self.assertEqual(status, STATUS_UNABLE_TO_VERIFY)
+            self.assertIn("timed out", reason.lower())
 
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.DNSException()):
+            status, css, reason = check_email("user@error-domain.com")
+            self.assertEqual(status, STATUS_UNABLE_TO_VERIFY)
+            self.assertIn("failed", reason.lower())
+
+    # 11. Bounded DNS Cache & Cache Eviction
+    def test_dns_caching_and_cache_eviction(self):
+        mx_mock = MagicMock()
+        mx_mock.preference = 5
+        mx_mock.exchange = "mx.cached.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]) as mock_resolve:
+            res1 = assess_email("first@cached.com")
+            res2 = assess_email("second@cached.com")
+            self.assertEqual(mock_resolve.call_count, 1)
+            self.assertEqual(res1["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(res2["status"], STATUS_MAIL_CONFIG)
+
+        self.assertGreaterEqual(get_dns_cache_size(), 1)
+
+        # Fill cache to test bounded size eviction
+        for i in range(_DNS_CACHE_MAX_SIZE + 5):
+            _DNS_CACHE[f"domain{i}.com"] = (time.time(), {"status": STATUS_MAIL_CONFIG})
+        
+        # Adding one more via resolver triggers eviction of oldest
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            resolve_domain_mail_config("trigger-eviction.com")
+        self.assertLessEqual(get_dns_cache_size(), _DNS_CACHE_MAX_SIZE)
+
+    # 12. CSV Sanitization & Formula Injection Shield
+    def test_csv_formula_injection_protection(self):
+        malicious_inputs = [
+            "=SUM(A1:A10)",
+            "+cmd|' /C calc'!A0",
+            "-2+3",
+            "@evil.com",
+            "\tTAB_INJECT",
+            "\rCR_INJECT",
+            "  =whitespace_prefixed",
+            "   +tab_after_spaces",
+            None,
+        ]
+        for val in malicious_inputs:
+            sanitized = sanitize_csv_value(val)
+            if val is None:
+                self.assertEqual(sanitized, "")
+            else:
+                self.assertTrue(
+                    sanitized.startswith("'"),
+                    f"Expected {val} to be escaped with leading quote, got: {sanitized}"
+                )
+
+        safe_input = "regular_user@example.com"
+        self.assertEqual(sanitize_csv_value(safe_input), safe_input)
+
+    # 13. CSV Export Endpoint
+    def test_csv_export_endpoint(self):
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            # Test with data
+            response = self.client.post("/export-csv", data={
+                "emails": "test@nonexistent.org\n=danger@injection.com"
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "text/csv")
+            self.assertIn("attachment; filename=", response.headers.get("Content-Disposition", ""))
+            
+            csv_content = response.data.decode("utf-8")
+            self.assertIn("Email Address,Assessment Status,Domain,Reason / Evidence,Mail Servers", csv_content)
+            self.assertIn("test@nonexistent.org", csv_content)
+            self.assertIn("'=danger@injection.com", csv_content)
+
+            # Test empty submission
+            empty_resp = self.client.post("/export-csv", data={"emails": ""})
+            self.assertEqual(empty_resp.status_code, 200)
+            self.assertIn("Email Address,Assessment Status,Domain", empty_resp.data.decode("utf-8"))
+
+            # Test submission exceeding MAX_EMAILS (truncated)
+            many_emails = "\n".join(f"user{i}@test.com" for i in range(25))
+            many_resp = self.client.post("/export-csv", data={"emails": many_emails})
+            self.assertEqual(many_resp.status_code, 200)
+            lines = many_resp.data.decode("utf-8").strip().splitlines()
+            # 1 header line + 20 data lines = 21 lines
+            self.assertEqual(len(lines), 21)
+
+    # 14. Accurate Summary Counts & Execution Benchmark
+    def test_accurate_summary_counts_and_benchmark(self):
+        xss_email = "<script>alert(1)</script>@invalid..domain"
+        with patch("time.perf_counter", side_effect=[100.0, 101.5]):
+            response = self.client.post("/", data={
+                "emails": f"{xss_email}\nvalid@syntax.org"
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn(b"<script>alert(1)</script>", response.data)
+            self.assertIn(b"&lt;script&gt;alert(1)&lt;/script&gt;", response.data)
+            self.assertIn(b"1.50s", response.data)
+
+    # 15. Domain Insights Aggregation
+    def test_domain_insights_aggregation(self):
+        sample_results = [
+            {
+                "email": "a@domain1.com",
+                "domain": "domain1.com",
+                "status": STATUS_MAIL_CONFIG,
+                "css": "status-success",
+                "badge": "Mail Configured",
+                "primary_mx": "mx1.domain1.com",
+                "mx_records": ["mx1.domain1.com"],
+            },
+            {
+                "email": "b@domain1.com",
+                "domain": "domain1.com",
+                "status": STATUS_MAIL_CONFIG,
+                "css": "status-success",
+                "badge": "Mail Configured",
+                "primary_mx": "mx1.domain1.com",
+                "mx_records": ["mx1.domain1.com"],
+            },
+            {
+                "email": "c@invalid",
+                "domain": "N/A",
+                "status": STATUS_INVALID_FORMAT,
+                "css": "status-danger",
+                "badge": "Invalid Format",
+                "primary_mx": "None",
+                "mx_records": [],
+            }
+        ]
+        insights = aggregate_domain_insights(sample_results)
+        self.assertEqual(len(insights), 1)
+        self.assertEqual(insights[0]["address_count"], 2)
+        self.assertEqual(insights[0]["primary_mx"], "mx1.domain1.com")
+        self.assertEqual(aggregate_domain_insights([]), [])
+
+    # 16. Health Check Endpoint
+    def test_health_check(self):
+        response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.data.count(
-                b"The address format is invalid."
-            ),
-            1
-        )
+        data = response.get_json()
+        self.assertEqual(data.get("status"), "healthy")
+        self.assertEqual(data.get("service"), "EmailCheck")
 
+    # 17. HTTP Error Handlers
+    def test_http_error_handlers(self):
+        # 404 handler via client
+        resp_404 = self.client.get("/nonexistent-page-url-xyz")
+        self.assertEqual(resp_404.status_code, 404)
+        self.assertIn(b"could not be found", resp_404.data)
 
-    def test_more_than_20_addresses(self):
-        emails = "\n".join(
-            "invalid-address-" + str(i)
-            for i in range(21)
-        )
+        # 413 handler
+        msg_413, code_413 = app.error_handler_spec[None][413][RequestEntityTooLarge](RequestEntityTooLarge())
+        self.assertEqual(code_413, 413)
+        self.assertIn("too large", msg_413.lower())
 
-        response = self.client.post("/", data={
-            "emails": emails
-        })
+        # 400 handler
+        msg_400, code_400 = app.error_handler_spec[None][400][BadRequest](BadRequest())
+        self.assertEqual(code_400, 400)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(
-            b"Please submit no more than 20 unique "
-            b"email addresses at a time.",
-            response.data
-        )
-
-    def test_empty_submission(self):
-        response = self.client.post("/", data={
-            "emails": ""
-        })
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(
-            b"Please enter at least one email address.",
-            response.data
-        )
-
-    def test_csv_export_button_is_available(self):
-        response = self.client.post("/", data={
-            "emails": "not-an-email"
-        })
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Download CSV", response.data)
-        self.assertIn(b"function downloadCSV()", response.data)
+        # 500 handler
+        msg_500, code_500 = app.error_handler_spec[None][500][InternalServerError](InternalServerError())
+        self.assertEqual(code_500, 500)
 
 
 if __name__ == "__main__":

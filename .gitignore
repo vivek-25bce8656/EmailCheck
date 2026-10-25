@@ -1,6 +1,15 @@
-.venv/
+﻿.venv/
 __pycache__/
 *.pyc
-app_backup.py
+*.pyo
+*.pyd
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+*.egg-info/
 .env
+app_backup.py
 app_before_upgrade.py
+.DS_Store
+Thumbs.db
