@@ -4,8 +4,10 @@ Production-grade Flask Web Application.
 """
 import io
 import csv
+import re
 import time
 from datetime import datetime, timezone
+from typing import List
 from flask import Flask, request, render_template, Response, make_response, jsonify
 from email_checker import (
     assess_email,
@@ -14,6 +16,10 @@ from email_checker import (
     clear_dns_cache,
     validate_email_syntax,
     resolve_domain_mail_config,
+    CATEGORY_LIKELY_DELIVERED,
+    CATEGORY_LIKELY_TO_BOUNCE,
+    CATEGORY_UNKNOWN,
+    DNS_STATUS_NXDOMAIN,
     STATUS_MAIL_CONFIG,
     STATUS_NO_MX,
     STATUS_NULL_MX,
@@ -40,13 +46,25 @@ MAX_INPUT_LENGTH = 12000
 EMAIL_PATTERN = LOCAL_PART_PATTERN
 
 
+def parse_email_input(input_text: str) -> List[str]:
+    """
+    Parse email addresses from text input.
+    Accepts addresses separated by newlines, commas, or semicolons.
+    Trims surrounding whitespace and removes empty items.
+    """
+    if not input_text or not isinstance(input_text, str):
+        return []
+    tokens = re.split(r"[\r\n,;]+", input_text)
+    return [t.strip() for t in tokens if t.strip()]
+
+
 def check_email(email: str):
     """
     Backward-compatible wrapper for email assessment.
-    Returns: (status, css, reason)
+    Returns: (classification, css, reason)
     """
     res = assess_email(email)
-    return res["status"], res["css"], res["reason"]
+    return res["classification"], res["css"], res["reason"]
 
 
 @app.after_request
@@ -90,17 +108,13 @@ def home():
         if len(input_text) > MAX_INPUT_LENGTH:
             notice = "Input is too long. Please shorten your list."
         else:
-            raw_lines = [
-                line.strip()
-                for line in input_text.splitlines()
-                if line.strip()
-            ]
-            total_submitted = len(raw_lines)
+            raw_tokens = parse_email_input(input_text)
+            total_submitted = len(raw_tokens)
 
             # Deduplicate while strictly preserving insertion order
             seen = set()
             unique_emails = []
-            for email in raw_lines:
+            for email in raw_tokens:
                 if email not in seen:
                     seen.add(email)
                     unique_emails.append(email)
@@ -135,15 +149,27 @@ def home():
 
                 domain_insights = aggregate_domain_insights(results)
 
-    # Compute category metrics
-    mail_config_count = sum(r["status"] == STATUS_MAIL_CONFIG for r in results)
-    no_mx_count = sum(r["status"] in (STATUS_NO_MX, STATUS_NULL_MX) for r in results)
-    domain_not_found_count = sum(r["status"] == STATUS_DOMAIN_NOT_FOUND for r in results)
-    invalid_format_count = sum(r["status"] == STATUS_INVALID_FORMAT for r in results)
-    unverified_count = sum(
-        r["status"] in (STATUS_UNABLE_TO_VERIFY, STATUS_UNKNOWN)
-        for r in results
+    # Compute category metrics for the 3 user-facing classifications
+    likely_delivered_count = sum(
+        r["classification"] == CATEGORY_LIKELY_DELIVERED for r in results
     )
+    likely_to_bounce_count = sum(
+        r["classification"] == CATEGORY_LIKELY_TO_BOUNCE for r in results
+    )
+    unknown_count = sum(
+        r["classification"] == CATEGORY_UNKNOWN for r in results
+    )
+
+    # Legacy metric counts for backward compatibility
+    mail_config_count = likely_delivered_count
+    no_mx_count = likely_to_bounce_count
+    domain_not_found_count = sum(
+        r.get("dns_status") == DNS_STATUS_NXDOMAIN for r in results
+    )
+    invalid_format_count = sum(
+        "Invalid syntax" in r.get("syntax_status", "") for r in results
+    )
+    unverified_count = unknown_count
 
     return render_template(
         "index.html",
@@ -153,6 +179,9 @@ def home():
         notice=notice,
         total_submitted=total_submitted,
         unique_count=unique_count,
+        likely_delivered_count=likely_delivered_count,
+        likely_to_bounce_count=likely_to_bounce_count,
+        unknown_count=unknown_count,
         mail_config_count=mail_config_count,
         no_mx_count=no_mx_count,
         domain_not_found_count=domain_not_found_count,
@@ -166,13 +195,14 @@ def home():
 def export_csv():
     """
     Generate and serve a CSV export with formula injection protection.
+    Accepts email addresses separated by newlines or commas.
     """
     input_text = request.form.get("emails", "")
-    raw_lines = [line.strip() for line in input_text.splitlines() if line.strip()]
+    raw_tokens = parse_email_input(input_text)
 
     seen = set()
     unique_emails = []
-    for email in raw_lines:
+    for email in raw_tokens:
         if email not in seen:
             seen.add(email)
             unique_emails.append(email)
@@ -183,22 +213,28 @@ def export_csv():
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
 
-    # Header Row
+    # Header Row with evidence-based assessment fields
     writer.writerow([
         "Email Address",
-        "Assessment Status",
+        "Classification",
+        "Short Explanation",
+        "Syntax Validation",
+        "DNS Mail-Routing Assessment",
+        "Limitations & Uncertainty",
         "Domain",
-        "Reason / Evidence",
-        "Mail Servers",
+        "Primary Mail Server",
     ])
 
     for email in unique_emails:
         res = assess_email(email)
         writer.writerow([
             sanitize_csv_value(res["email"]),
-            sanitize_csv_value(res["status"]),
-            sanitize_csv_value(res["domain"]),
+            sanitize_csv_value(res["classification"]),
             sanitize_csv_value(res["reason"]),
+            sanitize_csv_value(res.get("syntax_status", "")),
+            sanitize_csv_value(res.get("dns_status", "")),
+            sanitize_csv_value(res.get("limitation", "")),
+            sanitize_csv_value(res["domain"]),
             sanitize_csv_value(res["primary_mx"]),
         ])
 
@@ -217,7 +253,7 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "service": "EmailCheck",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }), 200
 

@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EmailCheck PRO | Email Validation & DNS Routing Assessment</title>
-    <meta name="description" content="Production-ready email assessment platform. High-precision RFC-oriented syntax validation, DNS & MX routing analysis, RFC 5321 fallback inspection, RFC 7505 Null MX detection, and safe CSV export.">
+    <title>EmailCheck PRO | Evidence-Based Email Classification & DNS Verification</title>
+    <meta name="description" content="Production-ready email assessment platform. High-precision RFC syntax validation, DNS & MX routing analysis, RFC 5321 fallback inspection, RFC 7505 Null MX detection, safe CSV export, and evidence-based 3-tier classification.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -25,7 +25,7 @@
                     </svg>
                 </div>
                 <span>EmailCheck</span>
-                <span class="brand-badge">v2.0 PRO</span>
+                <span class="brand-badge">v2.1 PRO</span>
             </a>
 
             <div class="nav-actions">
@@ -52,29 +52,33 @@
     <header class="hero">
         <div class="hero-pill">
             <span class="hero-pill-dot" aria-hidden="true"></span>
-            <span>Advanced Email Intelligence & DNS Verification</span>
+            <span>Advanced Email Intelligence · Evidence-Based Verification</span>
         </div>
-        <h1>Email Validation & DNS Routing Assessment</h1>
+        <h1>Email Validation & DNS Mail-Routing Assessment</h1>
         <p>
-            Deterministic assessment of RFC-oriented email syntax, DNS mail-routing configuration, and fallback hosts.
-            Non-intrusive, privacy-conscious, and technically honest—without fabricated mailbox claims.
+            Deterministic classification into <strong>Likely delivered</strong>, <strong>Likely to bounce</strong>, and <strong>Unknown</strong>.
+            Rigorous RFC syntax evaluation, authoritative MX resolution, RFC 7505 Null MX detection, and RFC 5321 fallback routing—technically honest without fabricated mailbox claims.
         </p>
         <div class="feature-chips">
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                RFC-Oriented Syntax
+                3-Tier Classification
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                Active MX Resolution
+                RFC Syntax Validation
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                A/AAAA Fallback Routing
+                Authoritative MX Records
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                RFC 7505 Null MX
+                RFC 5321 A/AAAA Fallback
+            </span>
+            <span class="feature-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                RFC 7505 Null MX Detection
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -82,7 +86,7 @@
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                No App Address Storage
+                Zero Invasive Probes
             </span>
         </div>
     </header>
@@ -98,6 +102,44 @@
         </div>
         {% endif %}
 
+        <!-- Three-Tier Classification Legend Card -->
+        <section class="card" aria-labelledby="legendSectionTitle" style="margin-bottom: 2rem;">
+            <div class="card-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+                <h2 id="legendSectionTitle" class="card-title" style="font-size: 1.05rem;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <span>Classification Framework (Assessment, Not Guaranteed Delivery)</span>
+                </h2>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                <div style="background: var(--status-success-bg); border: 1px solid var(--status-success-border); border-radius: var(--radius-md); padding: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <span class="status-pill status-success"><span class="status-dot"></span>Likely delivered</span>
+                    </div>
+                    <p style="font-size: 0.8125rem; color: var(--status-success-text); line-height: 1.45;">
+                        Address possesses valid RFC syntax and the domain resolves active mail-routing infrastructure (dedicated MX records or RFC 5321 A/AAAA host fallback). Delivery is plausible at the domain level; individual mailbox existence cannot be confirmed by DNS alone.
+                    </p>
+                </div>
+                <div style="background: var(--status-danger-bg); border: 1px solid var(--status-danger-border); border-radius: var(--radius-md); padding: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <span class="status-pill status-danger"><span class="status-dot"></span>Likely to bounce</span>
+                    </div>
+                    <p style="font-size: 0.8125rem; color: var(--status-danger-text); line-height: 1.45;">
+                        Definite failure condition detected: malformed email syntax, nonexistent domain (NXDOMAIN), RFC 7505 Null MX record (explicitly rejecting mail), or confirmed absence of both MX and host routing records.
+                    </p>
+                </div>
+                <div style="background: var(--status-neutral-bg); border: 1px solid var(--status-neutral-border); border-radius: var(--radius-md); padding: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <span class="status-pill status-neutral"><span class="status-dot"></span>Unknown</span>
+                    </div>
+                    <p style="font-size: 0.8125rem; color: var(--status-neutral-text); line-height: 1.45;">
+                        Conservative assessment: temporary DNS query timeouts, transient network disruptions, or resolver errors prevent establishing routing. A DNS timeout or lookup error is never assumed to be a bounce.
+                    </p>
+                </div>
+            </div>
+        </section>
+
         <!-- Input Workbench Card -->
         <section class="card" aria-labelledby="inputSectionTitle">
             <div class="card-header">
@@ -108,10 +150,10 @@
                         </svg>
                         <span>Input Email Batch</span>
                     </h2>
-                    <p class="card-subtitle">Enter up to 20 unique email addresses (one address per line). Duplicates and whitespace are automatically cleaned.</p>
+                    <p class="card-subtitle">Enter up to 20 unique email addresses (separated by newlines or commas). Duplicates and leading/trailing whitespace are automatically cleaned.</p>
                 </div>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn-ghost" id="btnSample" title="Load sample dataset for demonstration">
+                    <button type="button" class="btn-ghost" id="btnSample" title="Load sample dataset demonstrating all three classifications">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                         <span>Load Sample</span>
                     </button>
@@ -145,7 +187,7 @@
                         class="input-area"
                         required
                         maxlength="12000"
-                        placeholder="alex.developer@github.com&#10;contact@cloudflare.com&#10;engineering@google.com&#10;test.user@domain.org"
+                        placeholder="alex.developer@github.com, contact@cloudflare.com&#10;engineering@google.com&#10;invalid..syntax@error.org&#10;user@nonexistent-domain-test.xyz"
                         aria-describedby="workbenchHelp"
                     >{{ input_text }}</textarea>
                 </div>
@@ -159,7 +201,7 @@
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                         </svg>
-                        <span>Non-intrusive DNS assessment. EmailCheck does not send email messages, probe mailboxes, or retain address queries in application storage.</span>
+                        <span>Evidence-based DNS assessment. EmailCheck does not send email messages, probe mailboxes, or retain address queries in application storage.</span>
                     </div>
 
                     <div style="display: flex; gap: 0.75rem;">
@@ -183,7 +225,7 @@
             <div class="stats-grid">
                 <div class="stat-card stat-primary">
                     <div class="stat-card-header">
-                        <span>Unique Addresses Assessed</span>
+                        <span>Unique Assessed</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
                         </div>
@@ -194,46 +236,35 @@
 
                 <div class="stat-card stat-success">
                     <div class="stat-card-header">
-                        <span>Mail Routing Detected</span>
+                        <span>Likely Delivered</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                         </div>
                     </div>
-                    <div class="stat-value" id="statMailConfig">{{ mail_config_count }}</div>
-                    <div class="stat-desc">Active MX or fallback hosts</div>
-                </div>
-
-                <div class="stat-card stat-warning">
-                    <div class="stat-card-header">
-                        <span>No Mail Routing Detected</span>
-                        <div class="stat-icon" aria-hidden="true">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="statNoMx">{{ no_mx_count }}</div>
-                    <div class="stat-desc">No routing records or Null MX</div>
+                    <div class="stat-value" id="statLikelyDelivered">{{ likely_delivered_count }}</div>
+                    <div class="stat-desc">Active MX or host fallback</div>
                 </div>
 
                 <div class="stat-card stat-danger">
                     <div class="stat-card-header">
-                        <span>Domain Not Found</span>
-                        <div class="stat-icon" aria-hidden="true">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="statDomainNotFound">{{ domain_not_found_count }}</div>
-                    <div class="stat-desc">NXDOMAIN resolution failure</div>
-                </div>
-
-                <div class="stat-card stat-danger">
-                    <div class="stat-card-header">
-                        <span>Invalid Format</span>
+                        <span>Likely to Bounce</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </div>
                     </div>
-                    <div class="stat-value" id="statInvalidFormat">{{ invalid_format_count }}</div>
-                    <div class="stat-desc">Violates RFC syntax standards</div>
+                    <div class="stat-value" id="statLikelyToBounce">{{ likely_to_bounce_count }}</div>
+                    <div class="stat-desc">Syntax error, NXDOMAIN, Null MX</div>
+                </div>
+
+                <div class="stat-card stat-neutral">
+                    <div class="stat-card-header">
+                        <span>Unknown</span>
+                        <div class="stat-icon" aria-hidden="true">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                        </div>
+                    </div>
+                    <div class="stat-value" id="statUnknown">{{ unknown_count }}</div>
+                    <div class="stat-desc">DNS timeout or lookup error</div>
                 </div>
 
                 <div class="stat-card stat-neutral">
@@ -244,7 +275,7 @@
                         </div>
                     </div>
                     <div class="stat-value" id="statExecutionTime">{{ execution_time }}</div>
-                    <div class="stat-desc">DNS queries & evaluation</div>
+                    <div class="stat-desc">Total query benchmark</div>
                 </div>
             </div>
         </section>
@@ -259,14 +290,14 @@
                         </svg>
                         <span>Individual Address Assessments</span>
                     </h2>
-                    <p class="card-subtitle">Transparent, evidence-based results. Click any address or header to sort and copy.</p>
+                    <p class="card-subtitle">Transparent, evidence-based results with syntax validation, DNS routing assessment, and explicit limitations.</p>
                 </div>
                 <div class="toolbar-actions">
                     <button type="button" class="btn-ghost" id="btnCopyFiltered" title="Copy visible addresses to clipboard">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
                         <span>Copy Filtered</span>
                     </button>
-                    <!-- Robust CSV Export form with fallback -->
+                    <!-- Robust CSV Export form with formula injection defense -->
                     <form method="POST" action="/export-csv" id="serverExportForm" style="display: inline-block;">
                         <input type="hidden" name="emails" value="{{ input_text }}">
                         <button type="button" class="btn-primary" id="btnDownloadCsv" style="padding: 0.4rem 0.875rem; font-size: 0.8125rem;">
@@ -283,19 +314,16 @@
                     <span class="search-icon" aria-hidden="true">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </span>
-                    <input type="text" id="tableSearch" placeholder="Search by email, domain, or reason..." aria-label="Search assessment results">
+                    <input type="text" id="tableSearch" placeholder="Search by email, classification, domain, or reason..." aria-label="Search assessment results">
                 </div>
 
                 <div class="table-filters">
-                    <label for="statusFilter" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;">Filter by status</label>
-                    <select id="statusFilter" class="select-filter" aria-label="Filter results by assessment status">
-                        <option value="ALL">All Statuses ({{ results|length }})</option>
-                        <option value="Mail configuration detected">Mail Routing Detected</option>
-                        <option value="No MX record detected">No Mail Routing Detected</option>
-                        <option value="Null MX - Does not accept email">Null MX (No Email)</option>
-                        <option value="Domain not found">Domain Not Found</option>
-                        <option value="Invalid format">Invalid Format</option>
-                        <option value="Unable to verify">Unable to Verify</option>
+                    <label for="statusFilter" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;">Filter by classification</label>
+                    <select id="statusFilter" class="select-filter" aria-label="Filter results by assessment classification">
+                        <option value="ALL">All Classifications ({{ results|length }})</option>
+                        <option value="Likely delivered">Likely delivered ({{ likely_delivered_count }})</option>
+                        <option value="Likely to bounce">Likely to bounce ({{ likely_to_bounce_count }})</option>
+                        <option value="Unknown">Unknown ({{ unknown_count }})</option>
                     </select>
                     <span id="filteredCountBadge" class="badge badge-info">Showing {{ results|length }} of {{ results|length }}</span>
                 </div>
@@ -310,14 +338,16 @@
                             <th class="sortable" data-col="1" scope="col">
                                 Email Address <span class="sort-arrow" aria-hidden="true">&#x2195;</span>
                             </th>
-                            <th class="sortable" data-col="2" scope="col" style="width: 190px;">
-                                Status <span class="sort-arrow" aria-hidden="true">&#x2195;</span>
+                            <th class="sortable" data-col="2" scope="col" style="width: 175px;">
+                                Classification <span class="sort-arrow" aria-hidden="true">&#x2195;</span>
                             </th>
-                            <th class="sortable" data-col="3" scope="col" style="width: 170px;">
+                            <th class="sortable" data-col="3" scope="col" style="width: 160px;">
                                 Domain <span class="sort-arrow" aria-hidden="true">&#x2195;</span>
                             </th>
-                            <th scope="col">Assessment Reason & Technical Evidence</th>
-                            <th scope="col" style="width: 220px;">Primary Mail Server</th>
+                            <th scope="col" style="width: 160px;">Syntax Validation</th>
+                            <th scope="col" style="width: 190px;">DNS Mail Routing</th>
+                            <th scope="col">Short Explanation & Limitations</th>
+                            <th scope="col" style="width: 200px;">Primary Mail Server</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -325,9 +355,12 @@
                         <tr
                             data-email="{{ item.email }}"
                             data-domain="{{ item.domain }}"
-                            data-status="{{ item.status }}"
+                            data-status="{{ item.classification }}"
                             data-badge="{{ item.badge }}"
+                            data-syntax="{{ item.syntax_status }}"
+                            data-dns="{{ item.dns_status }}"
                             data-reason="{{ item.reason }}"
+                            data-limitation="{{ item.limitation }}"
                             data-mx="{{ item.primary_mx }}"
                         >
                             <td class="mono" style="color: var(--text-muted);">{{ loop.index }}</td>
@@ -342,11 +375,26 @@
                             <td>
                                 <span class="status-pill {{ item.css }}">
                                     <span class="status-dot" aria-hidden="true"></span>
-                                    <span>{{ item.badge }}</span>
+                                    <span>{{ item.classification }}</span>
                                 </span>
                             </td>
                             <td class="mono" style="font-size: 0.85rem;">{{ item.domain }}</td>
-                            <td class="reason-cell">{{ item.reason }}</td>
+                            <td style="font-size: 0.8125rem;">
+                                {% if 'Invalid syntax' in item.syntax_status %}
+                                <span style="color: var(--status-danger-text); font-weight: 500;">{{ item.syntax_status }}</span>
+                                {% else %}
+                                <span style="color: var(--status-success-text); font-weight: 500;">{{ item.syntax_status }}</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 0.8125rem; font-family: ui-monospace, SFMono-Regular, monospace;">
+                                {{ item.dns_status }}
+                            </td>
+                            <td class="reason-cell">
+                                <div>{{ item.reason }}</div>
+                                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                                    <strong>Limitation:</strong> {{ item.limitation }}
+                                </div>
+                            </td>
                             <td class="mx-cell">{{ item.primary_mx }}</td>
                         </tr>
                         {% endfor %}
@@ -377,11 +425,12 @@
                         <span class="domain-name">{{ d.domain }}</span>
                         <span class="status-pill {{ d.css }}" style="font-size: 0.7rem; padding: 0.15rem 0.5rem;">
                             <span class="status-dot"></span>
-                            <span>{{ d.badge }}</span>
+                            <span>{{ d.classification }}</span>
                         </span>
                     </div>
                     <div class="domain-meta">
                         <div><strong>Addresses in batch:</strong> {{ d.address_count }}</div>
+                        <div><strong>Routing Status:</strong> <span class="mono">{{ d.dns_status }}</span></div>
                         <div><strong>Primary Mail Server:</strong> <span class="mono">{{ d.primary_mx }}</span></div>
                     </div>
                 </div>
@@ -391,23 +440,24 @@
         {% endif %}
         {% endif %}
 
-        <!-- Technical Methodology & Honest Limitations Section -->
+        <!-- Technical Methodology, Hosting Environment & Responsible Assessment Section -->
         <section class="card" aria-labelledby="methodologyTitle">
             <h2 id="methodologyTitle" class="card-title">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
                 </svg>
-                <span>Methodology, Routing Standards & Limitations</span>
+                <span>Methodology, Hosting Environment & Responsible Assessment</span>
             </h2>
             <div class="info-content" style="border-radius: var(--radius-md); margin-top: 1rem;">
                 <p><strong>Why EmailCheck provides evidence-based assessments rather than absolute mailbox delivery claims:</strong></p>
                 <ul>
                     <li><strong>Routing Evidence vs. Mailbox Existence:</strong> DNS MX records and host fallback records verify whether a domain has mail-routing infrastructure configured. They do not confirm whether an individual recipient inbox exists or is currently accepting messages. Truthful verification without sending an email or intrusive probing cannot guarantee mailbox deliverability.</li>
-                    <li><strong>RFC 5321 Fallback Routing:</strong> When a domain lacks dedicated MX records, RFC 5321 Section 5.1 mandates checking the domain's IPv4 (A) and IPv6 (AAAA) addresses for implicit mail routing before concluding mail cannot be routed.</li>
-                    <li><strong>RFC 7505 Null MX Detection:</strong> If a domain publishes a Null MX record (target <code>.</code> with preference 0), it explicitly signals that the domain does not accept email. Under standards, implicit A/AAAA fallback routing does not apply.</li>
-                    <li><strong>No Invasive SMTP Mailbox Probing:</strong> EmailCheck intentionally avoids invasive SMTP connections (e.g., RCPT TO / VRFY handshake probing). Cloud hosts (including Render, AWS, and GCP) restrict outbound port 25 to combat spam, and modern email providers employ anti-harvesting defenses (greylisting, catch-alls) that make SMTP probing inaccurate and spam-like.</li>
-                    <li><strong>No Application-Level Address Storage:</strong> EmailCheck assesses email addresses purely in memory during request execution and does not persist, store, or sell submitted addresses in databases. Note: standard hosting-provider network transit logs may exist outside application control.</li>
+                    <li><strong>Hosting Environment Constraints (Render Network Policy):</strong> Cloud hosting environments (including Render, AWS, and GCP) strictly block outbound connections on TCP port 25 to prevent spam relaying and abuse. Direct SMTP mailbox socket probes (e.g. <code>HELO</code>, <code>MAIL FROM</code>, <code>RCPT TO</code>) are blocked by cloud network security policies and cannot be performed in production. Furthermore, modern mail servers employ greylisting, anti-harvesting, and catch-all policies that make SMTP probing inaccurate and spam-like. EmailCheck uses standard UDP/TCP port 53 DNS queries to provide reliable, non-intrusive domain routing verification without port 25 dependencies.</li>
+                    <li><strong>RFC 5321 Fallback Mail Routing:</strong> When a domain lacks dedicated MX records, RFC 5321 Section 5.1 specifies inspecting the domain's IPv4 (A) and IPv6 (AAAA) addresses for implicit mail routing before concluding mail cannot be routed.</li>
+                    <li><strong>RFC 7505 Null MX Detection:</strong> If a domain publishes a Null MX record (target <code>.</code> with preference 0), it explicitly signals that the domain does not accept email. Under standards, implicit A/AAAA fallback routing does not apply and the address is classified as <strong>Likely to bounce</strong>.</li>
+                    <li><strong>Conservative Classification of Uncertain Cases:</strong> A temporary DNS timeout or lookup failure is never treated as proof that a domain cannot receive email. When network resolution is inconclusive, the address is classified as <strong>Unknown</strong>.</li>
                     <li><strong>Spreadsheet Formula Injection Defense:</strong> When exporting assessment data to CSV, all fields are sanitized against formula execution (e.g., commands starting with <code>=</code>, <code>+</code>, <code>-</code>, <code>@</code>, <code>\t</code>, or <code>\r</code>), ensuring spreadsheet safety.</li>
+                    <li><strong>No Application-Level Address Storage:</strong> EmailCheck assesses email addresses purely in memory during request execution and does not persist, store, or sell submitted addresses in databases.</li>
                 </ul>
             </div>
         </section>

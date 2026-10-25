@@ -1,6 +1,6 @@
 /**
  * EmailCheck - Interactive Client Engine
- * Live input stats, sample loader, search, filters, dynamic metrics, sorting, CSV export, theme toggle
+ * Live input stats (newlines & commas), sample loader, search, filters (Likely delivered, Likely to bounce, Unknown), dynamic metrics, sorting, safe CSV export, and theme toggle.
  */
 
 (function () {
@@ -61,6 +61,15 @@
         }, duration);
     }
 
+    // Helper: Split tokens by newlines, commas, or semicolons
+    function parseTokens(rawText) {
+        if (!rawText) return [];
+        return rawText
+            .split(/[\r\n,;]+/)
+            .map(t => t.trim())
+            .filter(t => t.length > 0);
+    }
+
     // Input Workbench & Live Statistics
     function initWorkbench() {
         const textarea = document.getElementById("emailTextarea");
@@ -76,12 +85,11 @@
         if (!textarea) return;
 
         function updateStats() {
-            const rawText = textarea.value;
-            const lines = rawText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-            const totalLines = lines.length;
-            const uniqueSet = new Set(lines);
+            const tokens = parseTokens(textarea.value);
+            const totalTokens = tokens.length;
+            const uniqueSet = new Set(tokens);
             const uniqueCount = uniqueSet.size;
-            const duplicates = totalLines - uniqueCount;
+            const duplicates = totalTokens - uniqueCount;
             const remaining = Math.max(0, MAX_EMAILS - uniqueCount);
 
             if (uniqueCountEl) uniqueCountEl.textContent = uniqueCount;
@@ -132,7 +140,7 @@
         textarea.addEventListener("input", updateStats);
         updateStats(); // Initial execution
 
-        // Load Sample Data
+        // Load Sample Data demonstrating all three outcomes
         if (btnSample) {
             btnSample.addEventListener("click", () => {
                 const sampleBatch = [
@@ -159,11 +167,11 @@
             });
         }
 
-        // Form submit spinner & duplicate click prevention
+        // Form submit spinner & validation
         if (checkForm) {
             checkForm.addEventListener("submit", (e) => {
-                const lines = textarea.value.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-                const uniqueSet = new Set(lines);
+                const tokens = parseTokens(textarea.value);
+                const uniqueSet = new Set(tokens);
                 if (uniqueSet.size === 0) {
                     e.preventDefault();
                     showToast("Please enter at least one email address.");
@@ -196,7 +204,7 @@
         }
     }
 
-    // Results Table: Search, Filter, Dynamic Counts, Sort, Copy, CSV
+    // Results Table: Search, Filter (3 Categories), Dynamic Metrics, Sorting, Copy, CSV
     function initResultsTable() {
         const table = document.getElementById("resultsTable");
         if (!table) return;
@@ -211,10 +219,9 @@
 
         // Stat Card Elements for live metric synchronization
         const statUniqueEl = document.getElementById("statUniqueAssessed");
-        const statMailConfigEl = document.getElementById("statMailConfig");
-        const statNoMxEl = document.getElementById("statNoMx");
-        const statDomainNotFoundEl = document.getElementById("statDomainNotFound");
-        const statInvalidFormatEl = document.getElementById("statInvalidFormat");
+        const statLikelyDeliveredEl = document.getElementById("statLikelyDelivered");
+        const statLikelyToBounceEl = document.getElementById("statLikelyToBounce");
+        const statUnknownEl = document.getElementById("statUnknown");
 
         let currentSort = { col: -1, asc: true };
 
@@ -223,29 +230,39 @@
             const filter = (statusFilter ? statusFilter.value : "ALL");
 
             let visibleCount = 0;
-            let visibleMailConfig = 0;
-            let visibleNoMx = 0;
-            let visibleDomainNotFound = 0;
-            let visibleInvalidFormat = 0;
+            let visibleLikelyDelivered = 0;
+            let visibleLikelyToBounce = 0;
+            let visibleUnknown = 0;
 
             rows.forEach(row => {
                 const email = row.dataset.email ? row.dataset.email.toLowerCase() : "";
                 const domain = row.dataset.domain ? row.dataset.domain.toLowerCase() : "";
                 const status = row.dataset.status ? row.dataset.status : "";
                 const reason = row.dataset.reason ? row.dataset.reason.toLowerCase() : "";
+                const syntax = row.dataset.syntax ? row.dataset.syntax.toLowerCase() : "";
+                const dns = row.dataset.dns ? row.dataset.dns.toLowerCase() : "";
+                const limitation = row.dataset.limitation ? row.dataset.limitation.toLowerCase() : "";
 
-                const matchesQuery = !query || email.includes(query) || domain.includes(query) || reason.includes(query);
-                const matchesStatus = filter === "ALL" || status === filter;
+                const matchesQuery = (
+                    !query ||
+                    email.includes(query) ||
+                    domain.includes(query) ||
+                    status.toLowerCase().includes(query) ||
+                    reason.includes(query) ||
+                    syntax.includes(query) ||
+                    dns.includes(query) ||
+                    limitation.includes(query)
+                );
+
+                const matchesStatus = (filter === "ALL" || status === filter);
 
                 if (matchesQuery && matchesStatus) {
                     row.style.display = "";
                     visibleCount++;
 
-                    // Count metrics for visible rows
-                    if (status === "Mail configuration detected") visibleMailConfig++;
-                    else if (status === "No MX record detected" || status === "Null MX - Does not accept email") visibleNoMx++;
-                    else if (status === "Domain not found") visibleDomainNotFound++;
-                    else if (status === "Invalid format") visibleInvalidFormat++;
+                    if (status === "Likely delivered") visibleLikelyDelivered++;
+                    else if (status === "Likely to bounce") visibleLikelyToBounce++;
+                    else if (status === "Unknown") visibleUnknown++;
                 } else {
                     row.style.display = "none";
                 }
@@ -258,10 +275,9 @@
 
             // Dynamically synchronize summary card counts
             if (statUniqueEl) statUniqueEl.textContent = visibleCount;
-            if (statMailConfigEl) statMailConfigEl.textContent = visibleMailConfig;
-            if (statNoMxEl) statNoMxEl.textContent = visibleNoMx;
-            if (statDomainNotFoundEl) statDomainNotFoundEl.textContent = visibleDomainNotFound;
-            if (statInvalidFormatEl) statInvalidFormatEl.textContent = visibleInvalidFormat;
+            if (statLikelyDeliveredEl) statLikelyDeliveredEl.textContent = visibleLikelyDelivered;
+            if (statLikelyToBounceEl) statLikelyToBounceEl.textContent = visibleLikelyToBounce;
+            if (statUnknownEl) statUnknownEl.textContent = visibleUnknown;
 
             // Handle empty state
             let emptyRow = tbody.querySelector(".empty-state-row");
@@ -269,7 +285,7 @@
                 if (!emptyRow) {
                     emptyRow = document.createElement("tr");
                     emptyRow.className = "empty-state-row";
-                    emptyRow.innerHTML = `<td colspan="6" class="empty-table-state">No matching email assessments found. Try refining your search or filter.</td>`;
+                    emptyRow.innerHTML = `<td colspan="8" class="empty-table-state">No matching email assessments found. Try refining your search or classification filter.</td>`;
                     tbody.appendChild(emptyRow);
                 }
                 emptyRow.style.display = "";
@@ -393,7 +409,16 @@
     }
 
     function exportResultsToCsv(rows) {
-        const headers = ["Email Address", "Assessment Status", "Domain", "Reason / Evidence", "Mail Servers"];
+        const headers = [
+            "Email Address",
+            "Classification",
+            "Short Explanation",
+            "Syntax Validation",
+            "DNS Mail-Routing Assessment",
+            "Limitations & Uncertainty",
+            "Domain",
+            "Primary Mail Server"
+        ];
         const visibleRows = rows.filter(r => r.style.display !== "none");
 
         if (visibleRows.length === 0) {
@@ -406,11 +431,14 @@
         visibleRows.forEach(r => {
             const email = r.dataset.email || "";
             const status = r.dataset.status || "";
-            const domain = r.dataset.domain || "";
             const reason = r.dataset.reason || "";
+            const syntax = r.dataset.syntax || "";
+            const dns = r.dataset.dns || "";
+            const limitation = r.dataset.limitation || "";
+            const domain = r.dataset.domain || "";
             const mx = r.dataset.mx || "";
 
-            const rowData = [email, status, domain, reason, mx].map(sanitizeCsvCell);
+            const rowData = [email, status, reason, syntax, dns, limitation, domain, mx].map(sanitizeCsvCell);
             csvLines.push(rowData.join(","));
         });
 

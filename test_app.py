@@ -1,16 +1,19 @@
 """
 EmailCheck - Comprehensive Automated Test Suite
 Covers unit tests, RFC validation, mocked DNS, security headers,
-CSV injection shielding, IPv6 AAAA fallbacks, IDN, caching, and error handlers.
+CSV injection shielding, IPv6 AAAA fallbacks, RFC 7505 Null MX,
+3-tier classification (Likely delivered, Likely to bounce, Unknown),
+comma/newline input parsing, caching, and error handlers.
 """
 import unittest
 from unittest.mock import patch, MagicMock
 import time
 import dns.resolver
 import dns.exception
+import dns.name
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, InternalServerError
 
-from app import app, check_email
+from app import app, check_email, parse_email_input
 import email_checker
 from email_checker import (
     validate_email_syntax,
@@ -20,6 +23,16 @@ from email_checker import (
     sanitize_csv_value,
     clear_dns_cache,
     get_dns_cache_size,
+    CATEGORY_LIKELY_DELIVERED,
+    CATEGORY_LIKELY_TO_BOUNCE,
+    CATEGORY_UNKNOWN,
+    DNS_STATUS_ACTIVE_MX,
+    DNS_STATUS_FALLBACK,
+    DNS_STATUS_NULL_MX,
+    DNS_STATUS_NO_ROUTING,
+    DNS_STATUS_NXDOMAIN,
+    DNS_STATUS_TIMEOUT,
+    DNS_STATUS_ERROR,
     STATUS_MAIL_CONFIG,
     STATUS_NO_MX,
     STATUS_NULL_MX,
@@ -49,6 +62,9 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
         self.assertIn(b"Advanced Email Intelligence", response.data)
         self.assertIn(b"Assess Addresses", response.data)
         self.assertIn(b"Load Sample", response.data)
+        self.assertIn(b"Likely delivered", response.data)
+        self.assertIn(b"Likely to bounce", response.data)
+        self.assertIn(b"Unknown", response.data)
 
     # 2. Security Headers
     def test_security_headers_present(self):
@@ -96,7 +112,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             self.assertIn(expected_reason_substr.lower(), reason.lower())
 
             status, css, explanation = check_email(email)
-            self.assertEqual(status, STATUS_INVALID_FORMAT)
+            self.assertEqual(status, CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(css, "status-danger")
             self.assertIn(expected_reason_substr.lower(), explanation.lower())
 
     def test_validate_syntax_non_string_types(self):
@@ -173,7 +190,7 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
             status, css, reason = check_email("user@example.com")
-            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertEqual(status, CATEGORY_LIKELY_DELIVERED)
             self.assertEqual(css, "status-success")
             self.assertIn("active mail exchange", reason)
 
@@ -191,7 +208,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
             status, css, reason = check_email("fallback@example.com")
-            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertEqual(status, CATEGORY_LIKELY_DELIVERED)
+            self.assertEqual(css, "status-success")
             self.assertIn("Implicit mail routing fallback", reason)
             self.assertIn("93.184.216.34", reason)
 
@@ -208,7 +226,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
             status, css, reason = check_email("ipv6@example.com")
-            self.assertEqual(status, STATUS_MAIL_CONFIG)
+            self.assertEqual(status, CATEGORY_LIKELY_DELIVERED)
+            self.assertEqual(css, "status-success")
             self.assertIn("Implicit mail routing fallback", reason)
             self.assertIn("2001:db8::1", reason)
 
@@ -218,8 +237,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
             status, css, reason = check_email("user@no-mx-no-a.com")
-            self.assertEqual(status, STATUS_NO_MX)
-            self.assertEqual(css, "status-warning")
+            self.assertEqual(status, CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(css, "status-danger")
             self.assertIn("has no MX or fallback host records", reason)
 
     def test_fallback_timeout_handling(self):
@@ -230,25 +249,28 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve_a_timeout):
             res = resolve_domain_mail_config("timeout-host.com")
-            self.assertEqual(res["status"], STATUS_UNABLE_TO_VERIFY)
+            self.assertEqual(res["classification"], CATEGORY_UNKNOWN)
+            self.assertEqual(res["status"], CATEGORY_UNKNOWN)
             self.assertIn("timed out", res["reason"].lower())
 
     def test_nonexistent_domain_nxdomain(self):
         with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
             status, css, reason = check_email("user@nonexistent-domain.xyz")
-            self.assertEqual(status, STATUS_DOMAIN_NOT_FOUND)
+            self.assertEqual(status, CATEGORY_LIKELY_TO_BOUNCE)
             self.assertEqual(css, "status-danger")
             self.assertIn("does not exist in DNS", reason)
 
     def test_dns_timeout_and_exceptions(self):
         with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
             status, css, reason = check_email("user@timeout-domain.com")
-            self.assertEqual(status, STATUS_UNABLE_TO_VERIFY)
+            self.assertEqual(status, CATEGORY_UNKNOWN)
+            self.assertEqual(css, "status-neutral")
             self.assertIn("timed out", reason.lower())
 
         with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.DNSException()):
             status, css, reason = check_email("user@error-domain.com")
-            self.assertEqual(status, STATUS_UNABLE_TO_VERIFY)
+            self.assertEqual(status, CATEGORY_UNKNOWN)
+            self.assertEqual(css, "status-neutral")
             self.assertIn("failed", reason.lower())
 
     # 11. Bounded DNS Cache & Cache Eviction
@@ -261,15 +283,15 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             res1 = assess_email("first@cached.com")
             res2 = assess_email("second@cached.com")
             self.assertEqual(mock_resolve.call_count, 1)
-            self.assertEqual(res1["status"], STATUS_MAIL_CONFIG)
-            self.assertEqual(res2["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(res1["classification"], CATEGORY_LIKELY_DELIVERED)
+            self.assertEqual(res2["classification"], CATEGORY_LIKELY_DELIVERED)
 
         self.assertGreaterEqual(get_dns_cache_size(), 1)
 
         # Fill cache to test bounded size eviction
         for i in range(_DNS_CACHE_MAX_SIZE + 5):
-            _DNS_CACHE[f"domain{i}.com"] = (time.time(), {"status": STATUS_MAIL_CONFIG})
-        
+            _DNS_CACHE[f"domain{i}.com"] = (time.time(), {"classification": CATEGORY_LIKELY_DELIVERED})
+
         # Adding one more via resolver triggers eviction of oldest
         with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
             resolve_domain_mail_config("trigger-eviction.com")
@@ -311,16 +333,20 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.mimetype, "text/csv")
             self.assertIn("attachment; filename=", response.headers.get("Content-Disposition", ""))
-            
+
             csv_content = response.data.decode("utf-8")
-            self.assertIn("Email Address,Assessment Status,Domain,Reason / Evidence,Mail Servers", csv_content)
+            self.assertIn("Email Address", csv_content)
+            self.assertIn("Classification", csv_content)
+            self.assertIn("Domain", csv_content)
+            self.assertIn("Primary Mail Server", csv_content)
             self.assertIn("test@nonexistent.org", csv_content)
+            self.assertIn("Likely to bounce", csv_content)
             self.assertIn("'=danger@injection.com", csv_content)
 
             # Test empty submission
             empty_resp = self.client.post("/export-csv", data={"emails": ""})
             self.assertEqual(empty_resp.status_code, 200)
-            self.assertIn("Email Address,Assessment Status,Domain", empty_resp.data.decode("utf-8"))
+            self.assertIn("Email Address", empty_resp.data.decode("utf-8"))
 
             # Test submission exceeding MAX_EMAILS (truncated)
             many_emails = "\n".join(f"user{i}@test.com" for i in range(25))
@@ -348,27 +374,30 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             {
                 "email": "a@domain1.com",
                 "domain": "domain1.com",
-                "status": STATUS_MAIL_CONFIG,
+                "classification": CATEGORY_LIKELY_DELIVERED,
+                "status": CATEGORY_LIKELY_DELIVERED,
                 "css": "status-success",
-                "badge": "Mail Configured",
+                "badge": "Likely delivered",
                 "primary_mx": "mx1.domain1.com",
                 "mx_records": ["mx1.domain1.com"],
             },
             {
                 "email": "b@domain1.com",
                 "domain": "domain1.com",
-                "status": STATUS_MAIL_CONFIG,
+                "classification": CATEGORY_LIKELY_DELIVERED,
+                "status": CATEGORY_LIKELY_DELIVERED,
                 "css": "status-success",
-                "badge": "Mail Configured",
+                "badge": "Likely delivered",
                 "primary_mx": "mx1.domain1.com",
                 "mx_records": ["mx1.domain1.com"],
             },
             {
                 "email": "c@invalid",
                 "domain": "N/A",
-                "status": STATUS_INVALID_FORMAT,
+                "classification": CATEGORY_LIKELY_TO_BOUNCE,
+                "status": CATEGORY_LIKELY_TO_BOUNCE,
                 "css": "status-danger",
-                "badge": "Invalid Format",
+                "badge": "Likely to bounce",
                 "primary_mx": "None",
                 "mx_records": [],
             }
@@ -416,7 +445,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", return_value=[null_mx_mock]):
             res = resolve_domain_mail_config("null-mx-domain.example")
-            self.assertEqual(res["status"], STATUS_NULL_MX)
+            self.assertEqual(res["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(res["status"], CATEGORY_LIKELY_TO_BOUNCE)
             self.assertEqual(res["primary_mx"], ". (priority 0)")
             self.assertFalse(res["has_mx"])
             self.assertFalse(res["has_fallback"])
@@ -425,7 +455,8 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
             # Also check assess_email output
             email_res = assess_email("test@null-mx-domain.example")
-            self.assertEqual(email_res["status"], STATUS_NULL_MX)
+            self.assertEqual(email_res["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(email_res["status"], CATEGORY_LIKELY_TO_BOUNCE)
             self.assertEqual(email_res["primary_mx"], ". (priority 0)")
 
     def test_null_mx_distinction_from_missing_mx(self):
@@ -439,7 +470,7 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
         with patch("email_checker.dns.resolver.resolve", mock_resolve):
             res = resolve_domain_mail_config("explicit-null-mx.org")
-            self.assertEqual(res["status"], STATUS_NULL_MX)
+            self.assertEqual(res["classification"], CATEGORY_LIKELY_TO_BOUNCE)
             # Resolver should only have been queried for MX, not A or AAAA
             for call in mock_resolve.call_args_list:
                 self.assertEqual(call[0][1], "MX")
@@ -450,40 +481,35 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
         Confirmed defect regression test:
         When a batch contains invalid syntax addresses and valid syntax addresses
         sharing the same domain, and an invalid address appears first,
-        the domain summary must still accurately reflect the domain's DNS status
-        and not report the domain as 'Invalid Format'.
+        the domain summary must still accurately reflect the domain's DNS status.
         """
         mx_mock = MagicMock()
         mx_mock.preference = 10
         mx_mock.exchange = "mail.example.com."
 
         with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
-            # First address has malformed syntax; second has valid syntax with plus addressing
             response = self.client.post("/", data={
                 "emails": "malformed..address@example.com\nuser+tag@example.com"
             })
             self.assertEqual(response.status_code, 200)
 
-            # Verification of individual assessments
             assess_invalid = assess_email("malformed..address@example.com")
             assess_valid = assess_email("user+tag@example.com")
-            self.assertEqual(assess_invalid["status"], STATUS_INVALID_FORMAT)
-            self.assertEqual(assess_valid["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(assess_invalid["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(assess_valid["classification"], CATEGORY_LIKELY_DELIVERED)
 
-            # Verification of independent domain insights aggregation
             insights = aggregate_domain_insights([assess_invalid, assess_valid])
             self.assertEqual(len(insights), 1)
             self.assertEqual(insights[0]["domain"], "example.com")
-            self.assertEqual(insights[0]["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(insights[0]["classification"], CATEGORY_LIKELY_DELIVERED)
             self.assertEqual(insights[0]["address_count"], 2)
             self.assertIn("mail.example.com", insights[0]["primary_mx"])
 
     # 20. Domain Summary When All Addresses Have Syntax Errors
     def test_domain_summary_all_addresses_invalid_syntax(self):
         """
-        When all addresses for a domain have syntax errors (e.g. malformed local parts),
-        the domain summary should independently assess the domain DNS and not report
-        the domain as 'Invalid Format' if the domain itself is valid and routable.
+        When all addresses for a domain have syntax errors, the domain summary
+        should independently assess the domain DNS and report mail routing if valid.
         """
         mx_mock = MagicMock()
         mx_mock.preference = 10
@@ -492,18 +518,17 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
         with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
             assess1 = assess_email("bad..user1@example.com")
             assess2 = assess_email("bad..user2@example.com")
-            self.assertEqual(assess1["status"], STATUS_INVALID_FORMAT)
-            self.assertEqual(assess2["status"], STATUS_INVALID_FORMAT)
+            self.assertEqual(assess1["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(assess2["classification"], CATEGORY_LIKELY_TO_BOUNCE)
 
             insights = aggregate_domain_insights([assess1, assess2])
             self.assertEqual(len(insights), 1)
             self.assertEqual(insights[0]["domain"], "example.com")
-            self.assertEqual(insights[0]["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(insights[0]["classification"], CATEGORY_LIKELY_DELIVERED)
             self.assertEqual(insights[0]["address_count"], 2)
 
     # 21. Valid Plus-Addressing Syntax
     def test_valid_plus_addressing_syntax(self):
-        """Sub-addressing / plus-addressing is valid syntax and must not claim mailbox existence."""
         emails = [
             "developer+testing@github.com",
             "support+ticket-1234@company.co.uk",
@@ -516,13 +541,144 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
 
     # 22. Assessment Time Precision (< 1ms vs 0ms)
     def test_execution_time_formatting_precision(self):
-        """Assessment time should not display '0ms' for measured nonzero durations."""
-        # Nonzero sub-millisecond duration: 0.0003s = 0.3ms -> should display '< 1ms'
         with patch("time.perf_counter", side_effect=[100.0, 100.0003]):
             response = self.client.post("/", data={"emails": "user@example.com"})
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"&lt; 1ms", response.data)
             self.assertNotIn(b">0ms<", response.data)
+
+    # 23. Comma-Separated Input Parsing (ShieldNex Requirement 3)
+    def test_comma_and_semicolon_separated_input_parsing(self):
+        """Users can paste comma- or semicolon-separated email lists."""
+        raw_input = "first@example.com, second@example.com; third@example.com"
+        tokens = parse_email_input(raw_input)
+        self.assertEqual(tokens, ["first@example.com", "second@example.com", "third@example.com"])
+
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            response = self.client.post("/", data={"emails": raw_input})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"first@example.com", response.data)
+            self.assertIn(b"second@example.com", response.data)
+            self.assertIn(b"third@example.com", response.data)
+            self.assertIn(b"From 3 submitted lines", response.data)
+
+    # 24. Exact Three-Tier Classification Mapping (ShieldNex Requirement 1 & 2)
+    def test_three_tier_classification_exact_categories(self):
+        """Every assessed address must map to one of: Likely delivered, Likely to bounce, Unknown."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 5
+        mx_mock.exchange = "mail.domain.com."
+
+        # Case A: Valid syntax + MX -> Likely delivered
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            res_delivered = assess_email("valid.user@domain.com")
+            self.assertEqual(res_delivered["classification"], "Likely delivered")
+            self.assertEqual(res_delivered["status"], "Likely delivered")
+            self.assertEqual(res_delivered["css"], "status-success")
+
+        # Case B: Malformed syntax -> Likely to bounce
+        res_syntax_err = assess_email("bad..syntax@domain.com")
+        self.assertEqual(res_syntax_err["classification"], "Likely to bounce")
+        self.assertEqual(res_syntax_err["status"], "Likely to bounce")
+        self.assertEqual(res_syntax_err["css"], "status-danger")
+
+        # Case C: Nonexistent domain -> Likely to bounce
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            res_nx = assess_email("user@nonexistent.domain")
+            self.assertEqual(res_nx["classification"], "Likely to bounce")
+            self.assertEqual(res_nx["status"], "Likely to bounce")
+
+        # Case D: Null MX -> Likely to bounce
+        null_mock = MagicMock()
+        null_mock.preference = 0
+        null_mock.exchange = "."
+        with patch("email_checker.dns.resolver.resolve", return_value=[null_mock]):
+            res_null = assess_email("user@nullmx.domain")
+            self.assertEqual(res_null["classification"], "Likely to bounce")
+
+        # Case E: No MX & No A/AAAA -> Likely to bounce
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NoAnswer()):
+            res_no_routing = assess_email("user@norouting.domain")
+            self.assertEqual(res_no_routing["classification"], "Likely to bounce")
+
+        # Case F: DNS Timeout -> Unknown (NOT bounce)
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            res_timeout = assess_email("user@timeout.domain")
+            self.assertEqual(res_timeout["classification"], "Unknown")
+            self.assertEqual(res_timeout["status"], "Unknown")
+            self.assertEqual(res_timeout["css"], "status-neutral")
+
+        # Case G: DNS Exception -> Unknown (NOT bounce)
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.DNSException()):
+            res_err = assess_email("user@dnserror.domain")
+            self.assertEqual(res_err["classification"], "Unknown")
+            self.assertEqual(res_err["status"], "Unknown")
+
+    # 25. Batch Processing with Mixed Classifications (ShieldNex Requirement 2.D & 6)
+    def test_batch_processing_mixed_three_categories(self):
+        """Ensure batch contains all three categories and template shows them."""
+        def mock_dns_resolve(qname, rdtype, **kwargs):
+            q_str = str(qname).lower()
+            if "deliverable" in q_str:
+                mx_mock = MagicMock()
+                mx_mock.preference = 10
+                mx_mock.exchange = "mail.deliverable.com."
+                return [mx_mock]
+            elif "timeout" in q_str:
+                raise dns.exception.Timeout()
+            raise dns.resolver.NXDOMAIN()
+
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
+            batch_input = (
+                "user@deliverable.com\n"
+                "user@timeout.com\n"
+                "invalid..syntax@test.com\n"
+                "user@nxdomain.com"
+            )
+            response = self.client.post("/", data={"emails": batch_input})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Likely delivered", response.data)
+            self.assertIn(b"Likely to bounce", response.data)
+            self.assertIn(b"Unknown", response.data)
+
+    # 26. Uncertainty Must Never Be Classified As Bounce (ShieldNex Requirement 2.B)
+    def test_uncertainty_is_never_classified_as_bounce(self):
+        """DNS timeouts or connection errors must be Unknown, never Likely to bounce."""
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            res = assess_email("user@uncertain-network.org")
+            self.assertNotEqual(res["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(res["classification"], CATEGORY_UNKNOWN)
+            self.assertIn("timed out", res["reason"].lower())
+
+    # 27. Individual Mailbox Claims Strictly Disclaimed (ShieldNex Requirement 2.C)
+    def test_mailbox_existence_disclaimed_and_limitation_present(self):
+        """DNS assessment must have is_deliverable_claim=False and explicit limitation text."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.company.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            res = assess_email("ceo@company.com")
+            self.assertFalse(res["is_deliverable_claim"])
+            self.assertIn("limitation", res)
+            self.assertIn("mailbox existence cannot be confirmed", res["limitation"].lower())
+
+    # 28. CSV Export with Comma-Separated Submissions
+    def test_csv_export_with_comma_separated_submission(self):
+        """CSV export handles comma-separated email input list properly."""
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            response = self.client.post("/export-csv", data={
+                "emails": "alpha@test.com, beta@test.com, gamma@test.com"
+            })
+            self.assertEqual(response.status_code, 200)
+            csv_content = response.data.decode("utf-8")
+            self.assertIn("alpha@test.com", csv_content)
+            self.assertIn("beta@test.com", csv_content)
+            self.assertIn("gamma@test.com", csv_content)
 
 
 if __name__ == "__main__":

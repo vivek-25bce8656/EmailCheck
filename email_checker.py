@@ -1,6 +1,10 @@
 """
 EmailCheck - Core Email Assessment & DNS Intelligence Engine
 Provides evidence-based email syntax and DNS/MX routing analysis.
+Classifies each address into one of three user-facing categories:
+- Likely delivered
+- Likely to bounce
+- Unknown
 """
 import re
 import time
@@ -8,34 +12,72 @@ import threading
 from typing import Dict, List, Optional, Tuple, Any
 import dns.resolver
 import dns.exception
+import dns.name
 
 # RFC 5321 & 5322 constraints
 MAX_EMAIL_LENGTH = 254
 MAX_LOCAL_LENGTH = 64
 MAX_DOMAIN_LENGTH = 253
 
-# Result Categories
-STATUS_MAIL_CONFIG = "Mail configuration detected"
-STATUS_NO_MX = "No MX record detected"
-STATUS_NULL_MX = "Null MX - Does not accept email"
-STATUS_DOMAIN_NOT_FOUND = "Domain not found"
-STATUS_INVALID_FORMAT = "Invalid format"
-STATUS_UNABLE_TO_VERIFY = "Unable to verify"
-STATUS_UNKNOWN = "Unknown"
+# Primary User-Facing Classification Categories
+CATEGORY_LIKELY_DELIVERED = "Likely delivered"
+CATEGORY_LIKELY_TO_BOUNCE = "Likely to bounce"
+CATEGORY_UNKNOWN = "Unknown"
+
+# Technical DNS & Routing Status Indicators
+DNS_STATUS_ACTIVE_MX = "Active MX record(s) detected"
+DNS_STATUS_FALLBACK = "Implicit host routing fallback (A/AAAA)"
+DNS_STATUS_NULL_MX = "RFC 7505 Null MX (declares no email acceptance)"
+DNS_STATUS_NO_ROUTING = "No MX or fallback host (A/AAAA) records found"
+DNS_STATUS_NXDOMAIN = "Domain not found (NXDOMAIN)"
+DNS_STATUS_TIMEOUT = "DNS query timed out"
+DNS_STATUS_ERROR = "DNS temporary resolution / network failure"
+DNS_STATUS_NOT_EVALUATED = "Not evaluated (syntax error)"
+
+# Backward-Compatibility Status Aliases
+STATUS_MAIL_CONFIG = CATEGORY_LIKELY_DELIVERED
+STATUS_NO_MX = CATEGORY_LIKELY_TO_BOUNCE
+STATUS_NULL_MX = CATEGORY_LIKELY_TO_BOUNCE
+STATUS_DOMAIN_NOT_FOUND = CATEGORY_LIKELY_TO_BOUNCE
+STATUS_INVALID_FORMAT = CATEGORY_LIKELY_TO_BOUNCE
+STATUS_UNABLE_TO_VERIFY = CATEGORY_UNKNOWN
+STATUS_UNKNOWN = CATEGORY_UNKNOWN
 
 # CSS / Badge mappings
 STATUS_BADGES = {
-    STATUS_MAIL_CONFIG: {"css": "status-success", "badge": "Mail Routing Detected", "type": "valid"},
-    STATUS_NO_MX: {"css": "status-warning", "badge": "No Mail Routing Detected", "type": "warning"},
-    STATUS_NULL_MX: {"css": "status-warning", "badge": "Null MX", "type": "warning"},
-    STATUS_DOMAIN_NOT_FOUND: {"css": "status-danger", "badge": "Domain Not Found", "type": "danger"},
-    STATUS_INVALID_FORMAT: {"css": "status-danger", "badge": "Invalid Format", "type": "danger"},
-    STATUS_UNABLE_TO_VERIFY: {"css": "status-neutral", "badge": "Unable to Verify", "type": "neutral"},
-    STATUS_UNKNOWN: {"css": "status-neutral", "badge": "Inconclusive", "type": "neutral"},
+    CATEGORY_LIKELY_DELIVERED: {
+        "css": "status-success",
+        "badge": "Likely delivered",
+        "type": "success",
+    },
+    CATEGORY_LIKELY_TO_BOUNCE: {
+        "css": "status-danger",
+        "badge": "Likely to bounce",
+        "type": "danger",
+    },
+    CATEGORY_UNKNOWN: {
+        "css": "status-neutral",
+        "badge": "Unknown",
+        "type": "neutral",
+    },
 }
 
-LOCAL_PART_PATTERN = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$")
-DOMAIN_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+# Legacy Badge Lookups for Backward Compatibility
+STATUS_BADGES.update({
+    "Mail configuration detected": STATUS_BADGES[CATEGORY_LIKELY_DELIVERED],
+    "No MX record detected": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE],
+    "Null MX - Does not accept email": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE],
+    "Domain not found": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE],
+    "Invalid format": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE],
+    "Unable to verify": STATUS_BADGES[CATEGORY_UNKNOWN],
+})
+
+LOCAL_PART_PATTERN = re.compile(
+    r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$"
+)
+DOMAIN_LABEL_PATTERN = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+)
 
 # Thread-safe bounded in-memory DNS cache with TTL
 _DNS_CACHE: Dict[str, Tuple[float, Any]] = {}
@@ -111,20 +153,40 @@ def validate_domain_syntax(domain: str) -> Tuple[bool, str, str]:
 
     labels = ascii_domain.split(".")
     if len(labels) < 2:
-        return False, ascii_domain, "Domain must contain at least a name and a top-level domain (TLD)."
+        return (
+            False,
+            ascii_domain,
+            "Domain must contain at least a name and a top-level domain (TLD).",
+        )
 
     for label in labels:
         if not label:
-            return False, ascii_domain, "Domain contains an empty label or consecutive periods."
+            return (
+                False,
+                ascii_domain,
+                "Domain contains an empty label or consecutive periods.",
+            )
         if len(label) > 63:
-            return False, ascii_domain, f"Domain label '{label}' exceeds maximum 63 characters."
+            return (
+                False,
+                ascii_domain,
+                f"Domain label '{label}' exceeds maximum 63 characters.",
+            )
         if not DOMAIN_LABEL_PATTERN.fullmatch(label):
-            return False, ascii_domain, f"Domain label '{label}' contains invalid characters or starts/ends with a hyphen."
+            return (
+                False,
+                ascii_domain,
+                f"Domain label '{label}' contains invalid characters or starts/ends with a hyphen.",
+            )
 
     # TLD validation
     tld = labels[-1]
     if len(tld) < 2 or tld.isdigit():
-        return False, ascii_domain, "Top-level domain (TLD) is invalid or purely numeric."
+        return (
+            False,
+            ascii_domain,
+            "Top-level domain (TLD) is invalid or purely numeric.",
+        )
 
     return True, ascii_domain, ""
 
@@ -153,11 +215,21 @@ def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
         return False, "", "", "Email address is missing the '@' delimiter."
 
     if email.count("@") > 1:
-        return False, "", "", "Email address contains multiple '@' delimiters (invalid syntax)."
+        return (
+            False,
+            "",
+            "",
+            "Email address contains multiple '@' delimiters (invalid syntax).",
+        )
 
     # Check for whitespace inside the email address
     if any(c.isspace() for c in email):
-        return False, "", "", "Email address contains invalid whitespace characters."
+        return (
+            False,
+            "",
+            "",
+            "Email address contains invalid whitespace characters.",
+        )
 
     parts = email.split("@")
     if len(parts) != 2:
@@ -166,10 +238,20 @@ def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
     local_part, domain_part = parts
 
     if not local_part:
-        return False, "", domain_part, "Email address is missing the local user portion before '@'."
+        return (
+            False,
+            "",
+            domain_part,
+            "Email address is missing the local user portion before '@'.",
+        )
 
     if not domain_part:
-        return False, local_part, "", "Email address is missing the domain portion after '@'."
+        return (
+            False,
+            local_part,
+            "",
+            "Email address is missing the domain portion after '@'.",
+        )
 
     # Check for domain literals [IP]
     if domain_part.startswith("[") and domain_part.endswith("]"):
@@ -190,10 +272,20 @@ def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
         )
 
     if local_part.startswith(".") or local_part.endswith("."):
-        return False, local_part, domain_part, "Local part cannot start or end with a period."
+        return (
+            False,
+            local_part,
+            domain_part,
+            "Local part cannot start or end with a period.",
+        )
 
     if ".." in local_part:
-        return False, local_part, domain_part, "Local part cannot contain consecutive periods ('..')."
+        return (
+            False,
+            local_part,
+            domain_part,
+            "Local part cannot contain consecutive periods ('..').",
+        )
 
     # Check for non-ASCII in local part
     if any(ord(c) > 127 for c in local_part):
@@ -221,7 +313,7 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
     1. Look up MX records with a 2.5s timeout.
     2. Explicitly handle RFC 7505 Null MX (exchange '.') records declaring no email acceptance.
     3. If no MX record exists, query A and AAAA records as fallback (RFC 5321 Sec 5.1).
-    4. Handles NXDOMAIN, NoAnswer, Timeout, and DNSException safely.
+    4. Distinguish confirmed absence of mail routing from temporary timeouts or resolution errors.
     Thread-safe with bounded in-memory caching.
     """
     domain = domain.strip().lower().rstrip(".")
@@ -233,17 +325,20 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
             cached_time, cached_result = _DNS_CACHE[domain]
             ttl = (
                 _DNS_CACHE_TTL
-                if cached_result.get("status") != STATUS_UNABLE_TO_VERIFY
+                if cached_result.get("classification") != CATEGORY_UNKNOWN
                 else _DNS_CACHE_FAILURE_TTL
             )
             if now - cached_time < ttl:
                 return cached_result
 
     result: Dict[str, Any] = {
-        "status": STATUS_UNKNOWN,
-        "css": "status-neutral",
-        "badge": "Inconclusive",
+        "classification": CATEGORY_UNKNOWN,
+        "status": CATEGORY_UNKNOWN,
+        "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+        "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+        "dns_status": DNS_STATUS_ERROR,
         "reason": "Assessment inconclusive.",
+        "limitation": "Available evidence cannot reliably determine mail routing.",
         "mx_records": [],
         "primary_mx": None,
         "has_mx": False,
@@ -269,13 +364,18 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
         if is_null_mx:
             result = {
-                "status": STATUS_NULL_MX,
-                "css": STATUS_BADGES[STATUS_NULL_MX]["css"],
-                "badge": STATUS_BADGES[STATUS_NULL_MX]["badge"],
+                "classification": CATEGORY_LIKELY_TO_BOUNCE,
+                "status": CATEGORY_LIKELY_TO_BOUNCE,
+                "css": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"],
+                "badge": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"],
+                "dns_status": DNS_STATUS_NULL_MX,
                 "reason": (
                     "Domain publishes a Null MX record (RFC 7505) with target '.', "
                     "explicitly declaring that it does not accept email. "
                     "Implicit host routing fallback (A/AAAA) does not apply."
+                ),
+                "limitation": (
+                    "Domain explicitly rejects incoming email; messages sent to this address will bounce."
                 ),
                 "mx_records": [f". (priority {null_mx_pref})"],
                 "primary_mx": f". (priority {null_mx_pref})",
@@ -291,12 +391,18 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
             primary = mx_list[0] if mx_list else None
             result = {
-                "status": STATUS_MAIL_CONFIG,
-                "css": STATUS_BADGES[STATUS_MAIL_CONFIG]["css"],
-                "badge": STATUS_BADGES[STATUS_MAIL_CONFIG]["badge"],
+                "classification": CATEGORY_LIKELY_DELIVERED,
+                "status": CATEGORY_LIKELY_DELIVERED,
+                "css": STATUS_BADGES[CATEGORY_LIKELY_DELIVERED]["css"],
+                "badge": STATUS_BADGES[CATEGORY_LIKELY_DELIVERED]["badge"],
+                "dns_status": f"Active MX server: {primary}",
                 "reason": (
-                    "Domain has active mail exchange (MX) server(s) configured. "
-                    "Mail routing detected, but individual mailbox existence cannot be confirmed by DNS alone."
+                    f"Domain publishes active mail exchange (MX) server(s) ({primary}). "
+                    "Mail routing is configured at the domain level."
+                ),
+                "limitation": (
+                    "DNS records verify domain mail-routing infrastructure only; "
+                    "individual mailbox existence cannot be confirmed without sending an email."
                 ),
                 "mx_records": mx_list,
                 "primary_mx": primary,
@@ -306,10 +412,13 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
     except dns.resolver.NXDOMAIN:
         result = {
-            "status": STATUS_DOMAIN_NOT_FOUND,
-            "css": STATUS_BADGES[STATUS_DOMAIN_NOT_FOUND]["css"],
-            "badge": STATUS_BADGES[STATUS_DOMAIN_NOT_FOUND]["badge"],
-            "reason": "The domain does not exist in DNS (NXDOMAIN).",
+            "classification": CATEGORY_LIKELY_TO_BOUNCE,
+            "status": CATEGORY_LIKELY_TO_BOUNCE,
+            "css": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"],
+            "badge": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"],
+            "dns_status": DNS_STATUS_NXDOMAIN,
+            "reason": "The domain does not exist in DNS (NXDOMAIN); mail cannot be routed.",
+            "limitation": "Nonexistent domain prevents mail delivery; messages will bounce.",
             "mx_records": [],
             "primary_mx": None,
             "has_mx": False,
@@ -326,10 +435,16 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
             pass
         except dns.exception.Timeout:
             result = {
-                "status": STATUS_UNABLE_TO_VERIFY,
-                "css": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["css"],
-                "badge": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["badge"],
+                "classification": CATEGORY_UNKNOWN,
+                "status": CATEGORY_UNKNOWN,
+                "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+                "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+                "dns_status": DNS_STATUS_TIMEOUT,
                 "reason": "DNS check timed out while querying host A records.",
+                "limitation": (
+                    "Temporary DNS timeout. Delivery outcome cannot be reliably determined "
+                    "under current network conditions."
+                ),
                 "mx_records": [],
                 "primary_mx": None,
                 "has_mx": False,
@@ -353,10 +468,16 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
                 pass
             except dns.exception.Timeout:
                 result = {
-                    "status": STATUS_UNABLE_TO_VERIFY,
-                    "css": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["css"],
-                    "badge": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["badge"],
+                    "classification": CATEGORY_UNKNOWN,
+                    "status": CATEGORY_UNKNOWN,
+                    "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+                    "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+                    "dns_status": DNS_STATUS_TIMEOUT,
                     "reason": "DNS check timed out while querying host AAAA records.",
+                    "limitation": (
+                        "Temporary DNS timeout. Delivery outcome cannot be reliably determined "
+                        "under current network conditions."
+                    ),
                     "mx_records": [],
                     "primary_mx": None,
                     "has_mx": False,
@@ -373,12 +494,18 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
         if fallback_hosts:
             result = {
-                "status": STATUS_MAIL_CONFIG,
-                "css": STATUS_BADGES[STATUS_MAIL_CONFIG]["css"],
-                "badge": "Implicit Fallback",
+                "classification": CATEGORY_LIKELY_DELIVERED,
+                "status": CATEGORY_LIKELY_DELIVERED,
+                "css": STATUS_BADGES[CATEGORY_LIKELY_DELIVERED]["css"],
+                "badge": STATUS_BADGES[CATEGORY_LIKELY_DELIVERED]["badge"],
+                "dns_status": f"Implicit host fallback (RFC 5321): {fallback_hosts[0]}",
                 "reason": (
                     "No dedicated MX record found, but domain resolves to an active host IP address "
                     f"({fallback_hosts[0]}). Implicit mail routing fallback is active under RFC 5321."
+                ),
+                "limitation": (
+                    "Implicit fallback routing detected at domain level; individual mailbox "
+                    "existence cannot be confirmed by DNS alone without sending an email."
                 ),
                 "mx_records": [f"Implicit host record: {fallback_hosts[0]}"],
                 "primary_mx": fallback_hosts[0],
@@ -387,10 +514,18 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
             }
         else:
             result = {
-                "status": STATUS_NO_MX,
-                "css": STATUS_BADGES[STATUS_NO_MX]["css"],
-                "badge": STATUS_BADGES[STATUS_NO_MX]["badge"],
-                "reason": "Domain exists, but has no MX or fallback host records (A/AAAA) configured for mail routing.",
+                "classification": CATEGORY_LIKELY_TO_BOUNCE,
+                "status": CATEGORY_LIKELY_TO_BOUNCE,
+                "css": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"],
+                "badge": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"],
+                "dns_status": DNS_STATUS_NO_ROUTING,
+                "reason": (
+                    "Domain exists, but has no MX or fallback host records (A/AAAA) configured for mail routing."
+                ),
+                "limitation": (
+                    "Confirmed absence of usable mail routing; mail transfer agents cannot deliver "
+                    "messages to this domain."
+                ),
                 "mx_records": [],
                 "primary_mx": None,
                 "has_mx": False,
@@ -399,10 +534,15 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
     except dns.exception.Timeout:
         result = {
-            "status": STATUS_UNABLE_TO_VERIFY,
-            "css": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["css"],
-            "badge": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["badge"],
+            "classification": CATEGORY_UNKNOWN,
+            "status": CATEGORY_UNKNOWN,
+            "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+            "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+            "dns_status": DNS_STATUS_TIMEOUT,
             "reason": "DNS lookup timed out while querying mail exchange records.",
+            "limitation": (
+                "Temporary DNS timeout. This is not proof that the domain cannot receive email."
+            ),
             "mx_records": [],
             "primary_mx": None,
             "has_mx": False,
@@ -411,10 +551,15 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 
     except (dns.exception.DNSException, OSError, ValueError):
         result = {
-            "status": STATUS_UNABLE_TO_VERIFY,
-            "css": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["css"],
-            "badge": STATUS_BADGES[STATUS_UNABLE_TO_VERIFY]["badge"],
+            "classification": CATEGORY_UNKNOWN,
+            "status": CATEGORY_UNKNOWN,
+            "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+            "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+            "dns_status": DNS_STATUS_ERROR,
             "reason": "DNS check failed due to a temporary resolution or network error.",
+            "limitation": (
+                "Temporary network or resolver error. This is not proof that the domain cannot receive email."
+            ),
             "mx_records": [],
             "primary_mx": None,
             "has_mx": False,
@@ -434,18 +579,27 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
 def assess_email(email: str) -> Dict[str, Any]:
     """
     Perform a complete, evidence-based assessment of a single email address.
+    Classifies the address into exactly one of three user-facing categories:
+    - Likely delivered
+    - Likely to bounce
+    - Unknown
     Never attempts SMTP mailbox probes or sends emails.
     """
     clean_email = email.strip()
 
     is_valid, local_part, domain_part, syntax_error = validate_email_syntax(clean_email)
     if not is_valid:
+        syntax_desc = syntax_error or "The email address format violates RFC standards."
         return {
             "email": clean_email,
-            "status": STATUS_INVALID_FORMAT,
-            "css": STATUS_BADGES[STATUS_INVALID_FORMAT]["css"],
-            "badge": STATUS_BADGES[STATUS_INVALID_FORMAT]["badge"],
-            "reason": syntax_error or "The email address format violates RFC standards.",
+            "classification": CATEGORY_LIKELY_TO_BOUNCE,
+            "status": CATEGORY_LIKELY_TO_BOUNCE,
+            "css": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"],
+            "badge": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"],
+            "reason": f"Invalid email syntax: {syntax_desc}",
+            "syntax_status": f"Invalid syntax: {syntax_desc}",
+            "dns_status": DNS_STATUS_NOT_EVALUATED,
+            "limitation": "Malformed syntax causes mail servers and transfer agents to reject the address prior to delivery.",
             "domain": domain_part or "N/A",
             "primary_mx": "None",
             "mx_records": [],
@@ -456,10 +610,17 @@ def assess_email(email: str) -> Dict[str, Any]:
 
     return {
         "email": clean_email,
+        "classification": dns_info["classification"],
         "status": dns_info["status"],
         "css": dns_info["css"],
         "badge": dns_info["badge"],
         "reason": dns_info["reason"],
+        "syntax_status": "Valid RFC syntax",
+        "dns_status": dns_info.get("dns_status", "N/A"),
+        "limitation": dns_info.get(
+            "limitation",
+            "DNS records confirm domain mail-routing capability only; individual mailbox existence cannot be proven without sending an email.",
+        ),
         "domain": domain_part,
         "primary_mx": dns_info.get("primary_mx") or "None",
         "mx_records": dns_info.get("mx_records", []),
@@ -494,38 +655,50 @@ def aggregate_domain_insights(results: List[Dict[str, Any]]) -> List[Dict[str, A
         domain_map[domain_key]["addresses"].append(item.get("email", ""))
 
         # Record DNS-assessed result if available and not a syntax failure
-        if domain_key not in domain_dns_found and item.get("status") != STATUS_INVALID_FORMAT:
+        if (
+            domain_key not in domain_dns_found
+            and "Invalid syntax" not in item.get("syntax_status", "")
+        ):
             domain_dns_found[domain_key] = item
 
     insights: List[Dict[str, Any]] = []
     for domain_key, info in domain_map.items():
         if domain_key in domain_dns_found:
             dns_item = domain_dns_found[domain_key]
-            info["status"] = dns_item["status"]
-            info["css"] = dns_item["css"]
-            info["badge"] = dns_item["badge"]
+            info["classification"] = dns_item.get("classification", dns_item.get("status", CATEGORY_UNKNOWN))
+            info["status"] = dns_item.get("status", dns_item.get("classification", CATEGORY_UNKNOWN))
+            info["css"] = dns_item.get("css", "status-neutral")
+            info["badge"] = dns_item.get("badge", "Unknown")
+            info["dns_status"] = dns_item.get("dns_status", "N/A")
             info["primary_mx"] = dns_item.get("primary_mx", "None")
             info["mx_count"] = len(dns_item.get("mx_records", []))
             info["reason"] = dns_item.get("reason", "")
+            info["limitation"] = dns_item.get("limitation", "")
         else:
             # If all addresses for this domain had syntax errors, perform DNS assessment
             # independently if domain syntax is valid
             is_valid_dom, ascii_dom, _ = validate_domain_syntax(domain_key)
             if is_valid_dom:
                 dns_res = resolve_domain_mail_config(ascii_dom)
+                info["classification"] = dns_res["classification"]
                 info["status"] = dns_res["status"]
                 info["css"] = dns_res["css"]
                 info["badge"] = dns_res["badge"]
+                info["dns_status"] = dns_res.get("dns_status", "N/A")
                 info["primary_mx"] = dns_res.get("primary_mx") or "None"
                 info["mx_count"] = len(dns_res.get("mx_records", []))
                 info["reason"] = dns_res.get("reason", "")
+                info["limitation"] = dns_res.get("limitation", "")
             else:
-                info["status"] = STATUS_INVALID_FORMAT
-                info["css"] = STATUS_BADGES[STATUS_INVALID_FORMAT]["css"]
-                info["badge"] = STATUS_BADGES[STATUS_INVALID_FORMAT]["badge"]
+                info["classification"] = CATEGORY_LIKELY_TO_BOUNCE
+                info["status"] = CATEGORY_LIKELY_TO_BOUNCE
+                info["css"] = STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"]
+                info["badge"] = STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"]
+                info["dns_status"] = DNS_STATUS_NOT_EVALUATED
                 info["primary_mx"] = "None"
                 info["mx_count"] = 0
                 info["reason"] = "Domain label syntax violates RFC specifications."
+                info["limitation"] = "Invalid domain syntax prevents DNS resolution."
 
         insights.append(info)
 
