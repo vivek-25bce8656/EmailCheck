@@ -1,4 +1,4 @@
-﻿"""
+"""
 EmailCheck - Comprehensive Automated Test Suite
 Covers unit tests, RFC validation, mocked DNS, security headers,
 CSV injection shielding, IPv6 AAAA fallbacks, IDN, caching, and error handlers.
@@ -22,6 +22,7 @@ from email_checker import (
     get_dns_cache_size,
     STATUS_MAIL_CONFIG,
     STATUS_NO_MX,
+    STATUS_NULL_MX,
     STATUS_DOMAIN_NOT_FOUND,
     STATUS_INVALID_FORMAT,
     STATUS_UNABLE_TO_VERIFY,
@@ -405,6 +406,123 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
         # 500 handler
         msg_500, code_500 = app.error_handler_spec[None][500][InternalServerError](InternalServerError())
         self.assertEqual(code_500, 500)
+
+    # 18. RFC 7505 Null MX Handling
+    def test_null_mx_record_handling(self):
+        """A DNS MX record with exchange '.' explicitly indicates the domain does not accept email."""
+        null_mx_mock = MagicMock()
+        null_mx_mock.preference = 0
+        null_mx_mock.exchange = dns.name.from_text(".")
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[null_mx_mock]):
+            res = resolve_domain_mail_config("null-mx-domain.example")
+            self.assertEqual(res["status"], STATUS_NULL_MX)
+            self.assertEqual(res["primary_mx"], ". (priority 0)")
+            self.assertFalse(res["has_mx"])
+            self.assertFalse(res["has_fallback"])
+            self.assertIn("Null MX record (RFC 7505)", res["reason"])
+            self.assertIn("does not accept email", res["reason"])
+
+            # Also check assess_email output
+            email_res = assess_email("test@null-mx-domain.example")
+            self.assertEqual(email_res["status"], STATUS_NULL_MX)
+            self.assertEqual(email_res["primary_mx"], ". (priority 0)")
+
+    def test_null_mx_distinction_from_missing_mx(self):
+        """Ensure Null MX does not fall back to A/AAAA records even if host records exist."""
+        null_mx_mock = MagicMock()
+        null_mx_mock.preference = 0
+        null_mx_mock.exchange = "."
+
+        mock_resolve = MagicMock()
+        mock_resolve.return_value = [null_mx_mock]
+
+        with patch("email_checker.dns.resolver.resolve", mock_resolve):
+            res = resolve_domain_mail_config("explicit-null-mx.org")
+            self.assertEqual(res["status"], STATUS_NULL_MX)
+            # Resolver should only have been queried for MX, not A or AAAA
+            for call in mock_resolve.call_args_list:
+                self.assertEqual(call[0][1], "MX")
+
+    # 19. Mixed Valid & Invalid Addresses with Same Domain
+    def test_mixed_valid_and_invalid_addresses_domain_summary_independence(self):
+        """
+        Confirmed defect regression test:
+        When a batch contains invalid syntax addresses and valid syntax addresses
+        sharing the same domain, and an invalid address appears first,
+        the domain summary must still accurately reflect the domain's DNS status
+        and not report the domain as 'Invalid Format'.
+        """
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            # First address has malformed syntax; second has valid syntax with plus addressing
+            response = self.client.post("/", data={
+                "emails": "malformed..address@example.com\nuser+tag@example.com"
+            })
+            self.assertEqual(response.status_code, 200)
+
+            # Verification of individual assessments
+            assess_invalid = assess_email("malformed..address@example.com")
+            assess_valid = assess_email("user+tag@example.com")
+            self.assertEqual(assess_invalid["status"], STATUS_INVALID_FORMAT)
+            self.assertEqual(assess_valid["status"], STATUS_MAIL_CONFIG)
+
+            # Verification of independent domain insights aggregation
+            insights = aggregate_domain_insights([assess_invalid, assess_valid])
+            self.assertEqual(len(insights), 1)
+            self.assertEqual(insights[0]["domain"], "example.com")
+            self.assertEqual(insights[0]["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(insights[0]["address_count"], 2)
+            self.assertIn("mail.example.com", insights[0]["primary_mx"])
+
+    # 20. Domain Summary When All Addresses Have Syntax Errors
+    def test_domain_summary_all_addresses_invalid_syntax(self):
+        """
+        When all addresses for a domain have syntax errors (e.g. malformed local parts),
+        the domain summary should independently assess the domain DNS and not report
+        the domain as 'Invalid Format' if the domain itself is valid and routable.
+        """
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            assess1 = assess_email("bad..user1@example.com")
+            assess2 = assess_email("bad..user2@example.com")
+            self.assertEqual(assess1["status"], STATUS_INVALID_FORMAT)
+            self.assertEqual(assess2["status"], STATUS_INVALID_FORMAT)
+
+            insights = aggregate_domain_insights([assess1, assess2])
+            self.assertEqual(len(insights), 1)
+            self.assertEqual(insights[0]["domain"], "example.com")
+            self.assertEqual(insights[0]["status"], STATUS_MAIL_CONFIG)
+            self.assertEqual(insights[0]["address_count"], 2)
+
+    # 21. Valid Plus-Addressing Syntax
+    def test_valid_plus_addressing_syntax(self):
+        """Sub-addressing / plus-addressing is valid syntax and must not claim mailbox existence."""
+        emails = [
+            "developer+testing@github.com",
+            "support+ticket-1234@company.co.uk",
+            "first.last+newsletter@domain.org",
+        ]
+        for em in emails:
+            is_valid, local, domain, reason = validate_email_syntax(em)
+            self.assertTrue(is_valid, f"Expected {em} to be valid, got reason: {reason}")
+            self.assertIn("+", local)
+
+    # 22. Assessment Time Precision (< 1ms vs 0ms)
+    def test_execution_time_formatting_precision(self):
+        """Assessment time should not display '0ms' for measured nonzero durations."""
+        # Nonzero sub-millisecond duration: 0.0003s = 0.3ms -> should display '< 1ms'
+        with patch("time.perf_counter", side_effect=[100.0, 100.0003]):
+            response = self.client.post("/", data={"emails": "user@example.com"})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"&lt; 1ms", response.data)
+            self.assertNotIn(b">0ms<", response.data)
 
 
 if __name__ == "__main__":

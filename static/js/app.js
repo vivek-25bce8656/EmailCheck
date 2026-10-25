@@ -1,4 +1,4 @@
-﻿/**
+/**
  * EmailCheck - Interactive Client Engine
  * Live input stats, sample loader, search, filters, dynamic metrics, sorting, CSV export, theme toggle
  */
@@ -243,7 +243,7 @@
 
                     // Count metrics for visible rows
                     if (status === "Mail configuration detected") visibleMailConfig++;
-                    else if (status === "No MX record detected") visibleNoMx++;
+                    else if (status === "No MX record detected" || status === "Null MX - Does not accept email") visibleNoMx++;
                     else if (status === "Domain not found") visibleDomainNotFound++;
                     else if (status === "Invalid format") visibleInvalidFormat++;
                 } else {

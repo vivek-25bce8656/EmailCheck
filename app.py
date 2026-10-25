@@ -1,4 +1,4 @@
-﻿"""
+"""
 EmailCheck - Advanced Email Intelligence & DNS Verification Platform
 Production-grade Flask Web Application.
 """
@@ -16,6 +16,7 @@ from email_checker import (
     resolve_domain_mail_config,
     STATUS_MAIL_CONFIG,
     STATUS_NO_MX,
+    STATUS_NULL_MX,
     STATUS_DOMAIN_NOT_FOUND,
     STATUS_INVALID_FORMAT,
     STATUS_UNABLE_TO_VERIFY,
@@ -122,8 +123,13 @@ def home():
                     results.append(assessment)
 
                 t_duration = time.perf_counter() - t_start
-                if t_duration < 1.0:
-                    execution_time = f"{int(t_duration * 1000)}ms"
+                ms = t_duration * 1000.0
+                if t_duration <= 0:
+                    execution_time = "0ms"
+                elif ms < 1.0:
+                    execution_time = "< 1ms"
+                elif t_duration < 1.0:
+                    execution_time = f"{int(ms)}ms"
                 else:
                     execution_time = f"{t_duration:.2f}s"
 
@@ -131,11 +137,11 @@ def home():
 
     # Compute category metrics
     mail_config_count = sum(r["status"] == STATUS_MAIL_CONFIG for r in results)
-    no_mx_count = sum(r["status"] == STATUS_NO_MX for r in results)
+    no_mx_count = sum(r["status"] in (STATUS_NO_MX, STATUS_NULL_MX) for r in results)
     domain_not_found_count = sum(r["status"] == STATUS_DOMAIN_NOT_FOUND for r in results)
     invalid_format_count = sum(r["status"] == STATUS_INVALID_FORMAT for r in results)
     unverified_count = sum(
-        r["status"] in (STATUS_UNABLE_TO_VERIFY, STATUS_UNKNOWN, STATUS_NO_MX)
+        r["status"] in (STATUS_UNABLE_TO_VERIFY, STATUS_UNKNOWN)
         for r in results
     )
 

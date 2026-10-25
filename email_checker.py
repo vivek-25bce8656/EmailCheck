@@ -1,4 +1,4 @@
-﻿"""
+"""
 EmailCheck - Core Email Assessment & DNS Intelligence Engine
 Provides evidence-based email syntax and DNS/MX routing analysis.
 """
@@ -17,6 +17,7 @@ MAX_DOMAIN_LENGTH = 253
 # Result Categories
 STATUS_MAIL_CONFIG = "Mail configuration detected"
 STATUS_NO_MX = "No MX record detected"
+STATUS_NULL_MX = "Null MX - Does not accept email"
 STATUS_DOMAIN_NOT_FOUND = "Domain not found"
 STATUS_INVALID_FORMAT = "Invalid format"
 STATUS_UNABLE_TO_VERIFY = "Unable to verify"
@@ -24,8 +25,9 @@ STATUS_UNKNOWN = "Unknown"
 
 # CSS / Badge mappings
 STATUS_BADGES = {
-    STATUS_MAIL_CONFIG: {"css": "status-success", "badge": "Mail Configured", "type": "valid"},
-    STATUS_NO_MX: {"css": "status-warning", "badge": "No MX Record", "type": "warning"},
+    STATUS_MAIL_CONFIG: {"css": "status-success", "badge": "Mail Routing Detected", "type": "valid"},
+    STATUS_NO_MX: {"css": "status-warning", "badge": "No Mail Routing Detected", "type": "warning"},
+    STATUS_NULL_MX: {"css": "status-warning", "badge": "Null MX", "type": "warning"},
     STATUS_DOMAIN_NOT_FOUND: {"css": "status-danger", "badge": "Domain Not Found", "type": "danger"},
     STATUS_INVALID_FORMAT: {"css": "status-danger", "badge": "Invalid Format", "type": "danger"},
     STATUS_UNABLE_TO_VERIFY: {"css": "status-neutral", "badge": "Unable to Verify", "type": "neutral"},
@@ -70,15 +72,74 @@ def sanitize_csv_value(value: Any) -> str:
     return text.strip()
 
 
+def validate_domain_syntax(domain: str) -> Tuple[bool, str, str]:
+    """
+    Validate domain syntax against standard DNS host naming rules and IDN/Punycode.
+    Returns: (is_valid, ascii_domain, error_reason)
+    """
+    if not domain or not isinstance(domain, str):
+        return False, "", "Empty or null domain portion provided."
+
+    raw_domain = domain.strip().lower()
+    if not raw_domain:
+        return False, "", "Empty domain portion provided."
+
+    # Check for domain literals [IP]
+    if raw_domain.startswith("[") and raw_domain.endswith("]"):
+        return (
+            False,
+            raw_domain,
+            "Domain literals (IP addresses in brackets) are not supported for public mail routing.",
+        )
+
+    # Handle Internationalized Domain Names (IDN / Punycode)
+    try:
+        ascii_domain = raw_domain.encode("idna").decode("ascii")
+    except (UnicodeError, UnicodeDecodeError):
+        return (
+            False,
+            raw_domain,
+            "Domain contains non-ASCII characters that cannot be converted to valid IDN/Punycode.",
+        )
+
+    if len(ascii_domain) > MAX_DOMAIN_LENGTH:
+        return (
+            False,
+            ascii_domain,
+            f"Domain exceeds maximum length of {MAX_DOMAIN_LENGTH} characters.",
+        )
+
+    labels = ascii_domain.split(".")
+    if len(labels) < 2:
+        return False, ascii_domain, "Domain must contain at least a name and a top-level domain (TLD)."
+
+    for label in labels:
+        if not label:
+            return False, ascii_domain, "Domain contains an empty label or consecutive periods."
+        if len(label) > 63:
+            return False, ascii_domain, f"Domain label '{label}' exceeds maximum 63 characters."
+        if not DOMAIN_LABEL_PATTERN.fullmatch(label):
+            return False, ascii_domain, f"Domain label '{label}' contains invalid characters or starts/ends with a hyphen."
+
+    # TLD validation
+    tld = labels[-1]
+    if len(tld) < 2 or tld.isdigit():
+        return False, ascii_domain, "Top-level domain (TLD) is invalid or purely numeric."
+
+    return True, ascii_domain, ""
+
+
 def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
     """
-    Validate email address syntax against RFC 5321 and RFC 5322 specifications.
+    Validate email address syntax against RFC-oriented specifications (RFC 5321 / RFC 5322 constraints).
     Returns: (is_valid, local_part, domain_part, error_reason)
     """
     if not email or not isinstance(email, str):
         return False, "", "", "Empty or null address provided."
 
     email = email.strip()
+    if not email:
+        return False, "", "", "Empty or null address provided."
 
     if len(email) > MAX_EMAIL_LENGTH:
         return (
@@ -91,7 +152,14 @@ def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
     if "@" not in email:
         return False, "", "", "Email address is missing the '@' delimiter."
 
-    parts = email.rsplit("@", 1)
+    if email.count("@") > 1:
+        return False, "", "", "Email address contains multiple '@' delimiters (invalid syntax)."
+
+    # Check for whitespace inside the email address
+    if any(c.isspace() for c in email):
+        return False, "", "", "Email address contains invalid whitespace characters."
+
+    parts = email.split("@")
     if len(parts) != 2:
         return False, "", "", "Email address format is invalid."
 
@@ -140,43 +208,9 @@ def validate_email_syntax(email: str) -> Tuple[bool, str, str, str]:
         return False, local_part, domain_part, "Local part contains invalid characters."
 
     # Validate Domain Part & IDN Handling
-    raw_domain = domain_part.strip().lower()
-
-    # Handle Internationalized Domain Names (IDN / Punycode)
-    try:
-        ascii_domain = raw_domain.encode("idna").decode("ascii")
-    except UnicodeError:
-        return (
-            False,
-            local_part,
-            domain_part,
-            "Domain contains non-ASCII characters that cannot be converted to valid IDN/Punycode.",
-        )
-
-    if len(ascii_domain) > MAX_DOMAIN_LENGTH:
-        return (
-            False,
-            local_part,
-            domain_part,
-            f"Domain exceeds maximum length of {MAX_DOMAIN_LENGTH} characters.",
-        )
-
-    labels = ascii_domain.split(".")
-    if len(labels) < 2:
-        return False, local_part, domain_part, "Domain must contain at least a name and a top-level domain (TLD)."
-
-    for label in labels:
-        if not label:
-            return False, local_part, domain_part, "Domain contains an empty label or consecutive periods."
-        if len(label) > 63:
-            return False, local_part, domain_part, f"Domain label '{label}' exceeds maximum 63 characters."
-        if not DOMAIN_LABEL_PATTERN.fullmatch(label):
-            return False, local_part, domain_part, f"Domain label '{label}' contains invalid characters or starts/ends with a hyphen."
-
-    # TLD validation
-    tld = labels[-1]
-    if len(tld) < 2 or tld.isdigit():
-        return False, local_part, domain_part, "Top-level domain (TLD) is invalid or purely numeric."
+    is_domain_valid, ascii_domain, domain_err = validate_domain_syntax(domain_part)
+    if not is_domain_valid:
+        return False, local_part, domain_part, domain_err
 
     return True, local_part, ascii_domain, ""
 
@@ -185,8 +219,9 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
     """
     Check DNS records for mail configuration.
     1. Look up MX records with a 2.5s timeout.
-    2. If no MX record exists, query A and AAAA records as fallback (RFC 5321 Sec 5.1).
-    3. Handles NXDOMAIN, NoAnswer, Timeout, and DNSException safely.
+    2. Explicitly handle RFC 7505 Null MX (exchange '.') records declaring no email acceptance.
+    3. If no MX record exists, query A and AAAA records as fallback (RFC 5321 Sec 5.1).
+    4. Handles NXDOMAIN, NoAnswer, Timeout, and DNSException safely.
     Thread-safe with bounded in-memory caching.
     """
     domain = domain.strip().lower().rstrip(".")
@@ -218,26 +253,56 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
     try:
         # Step 1: MX record lookup
         mx_answers = dns.resolver.resolve(domain, "MX", lifetime=2.5)
-        mx_list = []
-        for rdata in sorted(mx_answers, key=lambda x: getattr(x, "preference", 0)):
-            pref = getattr(rdata, "preference", 0)
-            exchange = str(getattr(rdata, "exchange", "")).rstrip(".")
-            mx_list.append(f"{exchange} (priority {pref})")
 
-        primary = mx_list[0] if mx_list else None
-        result = {
-            "status": STATUS_MAIL_CONFIG,
-            "css": STATUS_BADGES[STATUS_MAIL_CONFIG]["css"],
-            "badge": STATUS_BADGES[STATUS_MAIL_CONFIG]["badge"],
-            "reason": (
-                "Domain has active mail exchange (MX) server(s) configured. "
-                "Mail servers detected, but individual mailbox existence cannot be confirmed by DNS alone."
-            ),
-            "mx_records": mx_list,
-            "primary_mx": primary,
-            "has_mx": True,
-            "has_fallback": False,
-        }
+        # Check for RFC 7505 Null MX record
+        # A Null MX record consists of a single MX with target "."
+        # explicitly declaring that the domain does not accept email.
+        is_null_mx = False
+        null_mx_pref = 0
+        for rdata in mx_answers:
+            ex_obj = getattr(rdata, "exchange", None)
+            ex_str = str(ex_obj).strip()
+            if ex_str in (".", "") or ex_obj == dns.name.root:
+                is_null_mx = True
+                null_mx_pref = getattr(rdata, "preference", 0)
+                break
+
+        if is_null_mx:
+            result = {
+                "status": STATUS_NULL_MX,
+                "css": STATUS_BADGES[STATUS_NULL_MX]["css"],
+                "badge": STATUS_BADGES[STATUS_NULL_MX]["badge"],
+                "reason": (
+                    "Domain publishes a Null MX record (RFC 7505) with target '.', "
+                    "explicitly declaring that it does not accept email. "
+                    "Implicit host routing fallback (A/AAAA) does not apply."
+                ),
+                "mx_records": [f". (priority {null_mx_pref})"],
+                "primary_mx": f". (priority {null_mx_pref})",
+                "has_mx": False,
+                "has_fallback": False,
+            }
+        else:
+            mx_list = []
+            for rdata in sorted(mx_answers, key=lambda x: getattr(x, "preference", 0)):
+                pref = getattr(rdata, "preference", 0)
+                exchange = str(getattr(rdata, "exchange", "")).rstrip(".")
+                mx_list.append(f"{exchange} (priority {pref})")
+
+            primary = mx_list[0] if mx_list else None
+            result = {
+                "status": STATUS_MAIL_CONFIG,
+                "css": STATUS_BADGES[STATUS_MAIL_CONFIG]["css"],
+                "badge": STATUS_BADGES[STATUS_MAIL_CONFIG]["badge"],
+                "reason": (
+                    "Domain has active mail exchange (MX) server(s) configured. "
+                    "Mail routing detected, but individual mailbox existence cannot be confirmed by DNS alone."
+                ),
+                "mx_records": mx_list,
+                "primary_mx": primary,
+                "has_mx": True,
+                "has_fallback": False,
+            }
 
     except dns.resolver.NXDOMAIN:
         result = {
@@ -404,28 +469,64 @@ def assess_email(email: str) -> Dict[str, Any]:
 
 def aggregate_domain_insights(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Group assessment results by domain to provide domain-level intelligence.
+    Group assessment results by domain to provide independent domain-level intelligence.
+    Domain DNS assessment is completely decoupled from individual email syntax errors:
+    a malformed address does not determine the DNS status of its domain.
     """
-    domains: Dict[str, Dict[str, Any]] = {}
+    domain_map: Dict[str, Dict[str, Any]] = {}
+    domain_dns_found: Dict[str, Dict[str, Any]] = {}
 
     for item in results:
-        domain = item.get("domain", "N/A")
-        if not domain or domain == "N/A":
+        raw_domain = item.get("domain", "N/A")
+        if not raw_domain or raw_domain == "N/A":
             continue
 
-        if domain not in domains:
-            domains[domain] = {
-                "domain": domain,
-                "status": item["status"],
-                "css": item["css"],
-                "badge": item["badge"],
-                "primary_mx": item.get("primary_mx", "None"),
-                "mx_count": len(item.get("mx_records", [])),
+        domain_key = raw_domain.strip().lower()
+
+        if domain_key not in domain_map:
+            domain_map[domain_key] = {
+                "domain": domain_key,
                 "address_count": 0,
                 "addresses": [],
             }
 
-        domains[domain]["address_count"] += 1
-        domains[domain]["addresses"].append(item["email"])
+        domain_map[domain_key]["address_count"] += 1
+        domain_map[domain_key]["addresses"].append(item.get("email", ""))
 
-    return list(domains.values())
+        # Record DNS-assessed result if available and not a syntax failure
+        if domain_key not in domain_dns_found and item.get("status") != STATUS_INVALID_FORMAT:
+            domain_dns_found[domain_key] = item
+
+    insights: List[Dict[str, Any]] = []
+    for domain_key, info in domain_map.items():
+        if domain_key in domain_dns_found:
+            dns_item = domain_dns_found[domain_key]
+            info["status"] = dns_item["status"]
+            info["css"] = dns_item["css"]
+            info["badge"] = dns_item["badge"]
+            info["primary_mx"] = dns_item.get("primary_mx", "None")
+            info["mx_count"] = len(dns_item.get("mx_records", []))
+            info["reason"] = dns_item.get("reason", "")
+        else:
+            # If all addresses for this domain had syntax errors, perform DNS assessment
+            # independently if domain syntax is valid
+            is_valid_dom, ascii_dom, _ = validate_domain_syntax(domain_key)
+            if is_valid_dom:
+                dns_res = resolve_domain_mail_config(ascii_dom)
+                info["status"] = dns_res["status"]
+                info["css"] = dns_res["css"]
+                info["badge"] = dns_res["badge"]
+                info["primary_mx"] = dns_res.get("primary_mx") or "None"
+                info["mx_count"] = len(dns_res.get("mx_records", []))
+                info["reason"] = dns_res.get("reason", "")
+            else:
+                info["status"] = STATUS_INVALID_FORMAT
+                info["css"] = STATUS_BADGES[STATUS_INVALID_FORMAT]["css"]
+                info["badge"] = STATUS_BADGES[STATUS_INVALID_FORMAT]["badge"]
+                info["primary_mx"] = "None"
+                info["mx_count"] = 0
+                info["reason"] = "Domain label syntax violates RFC specifications."
+
+        insights.append(info)
+
+    return insights

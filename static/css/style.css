@@ -1,4 +1,4 @@
-﻿/* ==========================================================================
+/* ==========================================================================
    EmailCheck - Modern SaaS Design System
    Variables, Reset, Typography, Components & Responsive Layout
    ========================================================================== */
@@ -794,6 +794,11 @@ table.data-table tbody tr:hover {
     font-weight: 500;
 }
 
+.email-cell span.mono {
+    word-break: break-all;
+    overflow-wrap: anywhere;
+}
+
 .btn-copy {
     background: transparent;
     border: none;
@@ -804,6 +809,7 @@ table.data-table tbody tr:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
     transition: var(--transition);
 }
 
@@ -862,12 +868,16 @@ table.data-table tbody tr:hover {
     font-size: 0.8125rem;
     line-height: 1.4;
     max-width: 380px;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .mx-cell {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.8rem;
     color: var(--text-muted);
+    word-break: break-all;
+    overflow-wrap: anywhere;
 }
 
 .empty-table-state {
@@ -907,6 +917,8 @@ table.data-table tbody tr:hover {
     font-family: ui-monospace, monospace;
     font-size: 0.9375rem;
     color: var(--text-primary);
+    word-break: break-all;
+    overflow-wrap: anywhere;
 }
 
 .domain-meta {

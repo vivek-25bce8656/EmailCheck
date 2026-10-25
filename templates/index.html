@@ -1,10 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EmailCheck | Advanced Email Intelligence & DNS Verification Platform</title>
-    <meta name="description" content="Production-ready email assessment platform. High-precision RFC syntax validation, DNS & MX routing analysis, RFC 5321 fallback inspection, and CSV injection protection.">
+    <title>EmailCheck PRO | Email Validation & DNS Routing Assessment</title>
+    <meta name="description" content="Production-ready email assessment platform. High-precision RFC-oriented syntax validation, DNS & MX routing analysis, RFC 5321 fallback inspection, RFC 7505 Null MX detection, and safe CSV export.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -52,17 +52,17 @@
     <header class="hero">
         <div class="hero-pill">
             <span class="hero-pill-dot" aria-hidden="true"></span>
-            <span>Evidence-Based Email Assessment Engine</span>
+            <span>Advanced Email Intelligence & DNS Verification</span>
         </div>
-        <h1>Advanced Email Intelligence & DNS Verification</h1>
+        <h1>Email Validation & DNS Routing Assessment</h1>
         <p>
-            Deterministic assessment of RFC address syntax, DNS mail-routing configuration, and fallback hosts.
-            Non-intrusive, privacy-focused, and technically honest—without fabricated mailbox claims.
+            Deterministic assessment of RFC-oriented email syntax, DNS mail-routing configuration, and fallback hosts.
+            Non-intrusive, privacy-conscious, and technically honest—without fabricated mailbox claims.
         </p>
         <div class="feature-chips">
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                RFC 5321 / 5322 Syntax
+                RFC-Oriented Syntax
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -74,11 +74,15 @@
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                RFC 7505 Null MX
+            </span>
+            <span class="feature-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                 CSV Injection Shield
             </span>
             <span class="feature-chip">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                Zero Address Retention
+                No App Address Storage
             </span>
         </div>
     </header>
@@ -155,7 +159,7 @@
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                         </svg>
-                        <span>Non-intrusive DNS assessment. EmailCheck does not send email messages, perform invasive SMTP handshakes, or store your queries.</span>
+                        <span>Non-intrusive DNS assessment. EmailCheck does not send email messages, probe mailboxes, or retain address queries in application storage.</span>
                     </div>
 
                     <div style="display: flex; gap: 0.75rem;">
@@ -179,7 +183,7 @@
             <div class="stats-grid">
                 <div class="stat-card stat-primary">
                     <div class="stat-card-header">
-                        <span>Unique Assessed</span>
+                        <span>Unique Addresses Assessed</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
                         </div>
@@ -190,7 +194,7 @@
 
                 <div class="stat-card stat-success">
                     <div class="stat-card-header">
-                        <span>Mail Configured</span>
+                        <span>Mail Routing Detected</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
                         </div>
@@ -201,13 +205,13 @@
 
                 <div class="stat-card stat-warning">
                     <div class="stat-card-header">
-                        <span>No MX Records</span>
+                        <span>No Mail Routing Detected</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                         </div>
                     </div>
                     <div class="stat-value" id="statNoMx">{{ no_mx_count }}</div>
-                    <div class="stat-desc">Missing mail routing records</div>
+                    <div class="stat-desc">No routing records or Null MX</div>
                 </div>
 
                 <div class="stat-card stat-danger">
@@ -234,7 +238,7 @@
 
                 <div class="stat-card stat-neutral">
                     <div class="stat-card-header">
-                        <span>Execution Time</span>
+                        <span>Assessment Time</span>
                         <div class="stat-icon" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         </div>
@@ -286,8 +290,9 @@
                     <label for="statusFilter" class="visually-hidden" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;">Filter by status</label>
                     <select id="statusFilter" class="select-filter" aria-label="Filter results by assessment status">
                         <option value="ALL">All Statuses ({{ results|length }})</option>
-                        <option value="Mail configuration detected">Mail Configured</option>
-                        <option value="No MX record detected">No MX Record</option>
+                        <option value="Mail configuration detected">Mail Routing Detected</option>
+                        <option value="No MX record detected">No Mail Routing Detected</option>
+                        <option value="Null MX - Does not accept email">Null MX (No Email)</option>
                         <option value="Domain not found">Domain Not Found</option>
                         <option value="Invalid format">Invalid Format</option>
                         <option value="Unable to verify">Unable to Verify</option>
@@ -321,6 +326,7 @@
                             data-email="{{ item.email }}"
                             data-domain="{{ item.domain }}"
                             data-status="{{ item.status }}"
+                            data-badge="{{ item.badge }}"
                             data-reason="{{ item.reason }}"
                             data-mx="{{ item.primary_mx }}"
                         >
@@ -336,7 +342,7 @@
                             <td>
                                 <span class="status-pill {{ item.css }}">
                                     <span class="status-dot" aria-hidden="true"></span>
-                                    <span>{{ item.status }}</span>
+                                    <span>{{ item.badge }}</span>
                                 </span>
                             </td>
                             <td class="mono" style="font-size: 0.85rem;">{{ item.domain }}</td>
@@ -391,15 +397,17 @@
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
                 </svg>
-                <span>Methodology, RFC Compliance & Transparency</span>
+                <span>Methodology, Routing Standards & Limitations</span>
             </h2>
             <div class="info-content" style="border-radius: var(--radius-md); margin-top: 1rem;">
                 <p><strong>Why EmailCheck provides evidence-based assessments rather than absolute mailbox delivery claims:</strong></p>
                 <ul>
-                    <li><strong>DNS and MX records prove mail infrastructure, not individual inbox existence:</strong> Having valid MX records proves the domain is configured to accept mail via designated mail servers. It cannot confirm whether a specific user mailbox exists without sending mail or intrusive probing.</li>
-                    <li><strong>RFC 5321 Section 5.1 Fallback Rules:</strong> If a domain lacks explicit MX records, email protocol specifications dictate falling back to the domain's A or AAAA address. EmailCheck automatically inspects this fallback before declaring a domain non-routable.</li>
-                    <li><strong>No Intrusive SMTP Probing:</strong> Cloud environments (including Render, AWS, and GCP) block outbound port 25 to prevent spam. Furthermore, modern mail providers (Google Workspace, Microsoft 365) employ greylisting, catch-all configurations, and anti-harvesting defenses that render VRFY/RCPT probing inaccurate or counterproductive.</li>
-                    <li><strong>Formula Injection Shielding:</strong> When exporting assessment data to CSV, all fields are sanitized against formula execution (e.g. commands starting with <code>=</code>, <code>+</code>, <code>-</code>, or <code>@</code>), ensuring spreadsheet safety.</li>
+                    <li><strong>Routing Evidence vs. Mailbox Existence:</strong> DNS MX records and host fallback records verify whether a domain has mail-routing infrastructure configured. They do not confirm whether an individual recipient inbox exists or is currently accepting messages. Truthful verification without sending an email or intrusive probing cannot guarantee mailbox deliverability.</li>
+                    <li><strong>RFC 5321 Fallback Routing:</strong> When a domain lacks dedicated MX records, RFC 5321 Section 5.1 mandates checking the domain's IPv4 (A) and IPv6 (AAAA) addresses for implicit mail routing before concluding mail cannot be routed.</li>
+                    <li><strong>RFC 7505 Null MX Detection:</strong> If a domain publishes a Null MX record (target <code>.</code> with preference 0), it explicitly signals that the domain does not accept email. Under standards, implicit A/AAAA fallback routing does not apply.</li>
+                    <li><strong>No Invasive SMTP Mailbox Probing:</strong> EmailCheck intentionally avoids invasive SMTP connections (e.g., RCPT TO / VRFY handshake probing). Cloud hosts (including Render, AWS, and GCP) restrict outbound port 25 to combat spam, and modern email providers employ anti-harvesting defenses (greylisting, catch-alls) that make SMTP probing inaccurate and spam-like.</li>
+                    <li><strong>No Application-Level Address Storage:</strong> EmailCheck assesses email addresses purely in memory during request execution and does not persist, store, or sell submitted addresses in databases. Note: standard hosting-provider network transit logs may exist outside application control.</li>
+                    <li><strong>Spreadsheet Formula Injection Defense:</strong> When exporting assessment data to CSV, all fields are sanitized against formula execution (e.g., commands starting with <code>=</code>, <code>+</code>, <code>-</code>, <code>@</code>, <code>\t</code>, or <code>\r</code>), ensuring spreadsheet safety.</li>
                 </ul>
             </div>
         </section>
@@ -409,8 +417,8 @@
     <footer class="app-footer" role="contentinfo">
         <div class="footer-container">
             <div class="footer-brand">
-                <span>EmailCheck Intelligence Platform</span>
-                <p>Designed for engineers, analysts, and developers seeking transparent email validation.</p>
+                <span>EmailCheck PRO Platform</span>
+                <p>Designed for engineers, analysts, and developers seeking transparent email validation and DNS routing assessment.</p>
             </div>
             <div class="footer-links">
                 <a href="https://github.com/vivek-25bce8656/EmailCheck" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
