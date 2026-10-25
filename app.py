@@ -1,12 +1,22 @@
 
 from flask import Flask, request, render_template_string
 import re
+import smtplib
 import dns.resolver
 import dns.exception
-import smtplib
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+MAX_EMAILS = 20
+MAX_INPUT_LENGTH = 12000
+
+EMAIL_PATTERN = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}"
+    r"[A-Za-z0-9])?)+$"
+)
+
 PAGE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -18,14 +28,14 @@ PAGE = """
 * { box-sizing: border-box; }
 body {
     margin: 0; font-family: Arial, sans-serif;
-    background: #f4f7fb; color: #172033;
+    background: #f1f5f9; color: #172033;
 }
 header {
     background: #172554; color: white;
-    padding: 24px; text-align: center;
+    padding: 28px 16px; text-align: center;
 }
 header p { color: #dbeafe; }
-main { max-width: 900px; margin: 28px auto; padding: 0 16px; }
+main { max-width: 1000px; margin: 28px auto; padding: 0 16px; }
 .panel {
     background: white; padding: 22px; border-radius: 12px;
     box-shadow: 0 3px 14px #0000000c; margin-bottom: 20px;
@@ -36,73 +46,90 @@ textarea {
     font: 15px Arial; resize: vertical;
 }
 button {
-    background: #2563eb; color: white; border: 0;
-    border-radius: 8px; padding: 12px 20px;
-    cursor: pointer; font-size: 15px; margin-top: 12px;
+    border: 0; border-radius: 8px; padding: 12px 18px;
+    cursor: pointer; font-size: 15px; margin: 8px 6px 0 0;
 }
-button:hover { background: #1d4ed8; }
-.notice { color: #475569; line-height: 1.5; font-size: 14px; }
+.primary { background: #2563eb; color: white; }
+.secondary { background: #e2e8f0; color: #172033; }
+button:disabled { opacity: .6; cursor: wait; }
+.notice { color: #475569; line-height: 1.6; font-size: 14px; }
 .stats { display: flex; gap: 12px; flex-wrap: wrap; }
 .stat {
-    flex: 1; min-width: 150px; padding: 16px;
+    flex: 1; min-width: 140px; padding: 16px;
     border-radius: 8px; background: #eff6ff;
 }
-.stat strong { display: block; font-size: 25px; margin-top: 8px; }
+.stat strong { display: block; font-size: 26px; margin-top: 8px; }
+.table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td {
     text-align: left; padding: 12px 8px;
     border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere;
 }
 th { background: #f8fafc; }
-.status { font-weight: bold; }
 .good { color: #166534; }
 .bad { color: #b91c1c; }
 .unknown { color: #92400e; }
-.table-wrap { overflow-x: auto; }
+.status { font-weight: bold; }
 footer { text-align: center; color: #64748b; padding: 20px; }
 </style>
 </head>
 <body>
 <header>
     <h1>EmailCheck</h1>
-    <p>Assess email addresses with clear, honest results.</p>
+    <p>Understand email address checks with transparent results.</p>
 </header>
 <main>
     <section class="panel">
         <h2>Check email addresses</h2>
-        <p>Paste one address per line.</p>
-        <form method="post">
-            <textarea name="emails" required
+        <p>Enter up to 20 unique addresses, one per line.</p>
+        <form method="post" id="checkForm">
+            <textarea name="emails" required maxlength="12000"
                 placeholder="person@example.com&#10;another@example.org"
             >{{ input_text }}</textarea>
             <br>
-            <button type="submit">Check addresses</button>
+            <button class="primary" id="checkButton" type="submit">
+                Check addresses
+            </button>
+            <button class="secondary" type="button"
+                onclick="window.location.href='/'">Reset</button>
+            <span id="loading" role="status" aria-live="polite"></span>
         </form>
         <p class="notice">
-            Results are estimates, not guarantees of inbox delivery.
-            Do not use this tool to send messages to addresses you do not own.
+            Results are estimates, not delivery guarantees.
+            This tool does not send email messages. Use only addresses
+            you are authorized to assess.
         </p>
     </section>
+
     {% if notice %}
-    <section class="panel notice">
-        {{ notice }}
-    </section>
+    <section class="panel notice" role="alert">{{ notice }}</section>
     {% endif %}
+
     {% if results %}
     <section class="panel">
         <h2>Assessment summary</h2>
         <div class="stats">
-            <div class="stat">Total checked<strong>{{ results|length }}</strong></div>
-            <div class="stat">Likely delivered<strong>{{ good_count }}</strong></div>
-            <div class="stat">Likely to bounce<strong>{{ bad_count }}</strong></div>
-            <div class="stat">Unknown<strong>{{ unknown_count }}</strong></div>
+            <div class="stat">Unique addresses
+                <strong>{{ results|length }}</strong></div>
+            <div class="stat">Likely delivered
+                <strong>{{ good_count }}</strong></div>
+            <div class="stat">Likely to bounce
+                <strong>{{ bad_count }}</strong></div>
+            <div class="stat">Unknown
+                <strong>{{ unknown_count }}</strong></div>
         </div>
+        <button class="primary" type="button" onclick="downloadCSV()">
+            Download CSV
+        </button>
     </section>
+
     <section class="panel">
         <h2>Individual results</h2>
         <div class="table-wrap">
-        <table>
-            <thead><tr><th>Email address</th><th>Result</th><th>Reason</th></tr></thead>
+        <table id="resultsTable">
+            <thead><tr>
+                <th>Email address</th><th>Result</th><th>Reason</th>
+            </tr></thead>
             <tbody>
             {% for item in results %}
             <tr>
@@ -117,29 +144,65 @@ footer { text-align: center; color: #64748b; padding: 20px; }
     </section>
     {% endif %}
 </main>
-<footer>EmailCheck &middot; Transparent email assessment</footer>
+<footer>EmailCheck | Transparent email assessment</footer>
+<script>
+const form = document.getElementById("checkForm");
+if (form) {
+    form.addEventListener("submit", function () {
+        document.getElementById("checkButton").disabled = true;
+        document.getElementById("loading").textContent =
+            " Checking addresses... Please wait.";
+    });
+}
+
+function downloadCSV() {
+    const table = document.getElementById("resultsTable");
+    if (!table) return;
+
+    const rows = Array.from(table.querySelectorAll("tr"));
+    const csv = rows.map(row =>
+        Array.from(row.querySelectorAll("th,td")).map(cell => {
+            let value = cell.innerText.replace(/"/g, '""');
+            if (/^[=+@\\-\\t\\r]/.test(value)) {
+                value = "'" + value;
+            }
+            return '"' + value + '"';
+        }).join(",")
+    ).join("\\r\\n");
+
+    const blob = new Blob(["\\ufeff" + csv], {
+        type: "text/csv;charset=utf-8;"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "emailcheck-results.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+</script>
 </body>
 </html>
 """
 
 
-
 def check_email(email):
-    pattern = r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
-
-    if not re.fullmatch(pattern, email):
+    if len(email) > 254 or not EMAIL_PATTERN.fullmatch(email):
         return ("Likely to bounce", "bad",
                 "The address format is invalid.")
 
-    domain = email.rsplit("@", 1)[1].lower()
+    local, domain = email.rsplit("@", 1)
+
+    if (len(local) > 64 or ".." in local
+            or local.startswith(".") or local.endswith(".")):
+        return ("Likely to bounce", "bad",
+                "The address format is invalid.")
 
     try:
-        mx_records = dns.resolver.resolve(
-            domain, "MX", lifetime=3
-        )
-        servers = sorted(
-            mx_records, key=lambda record: record.preference
-        )
+        records = dns.resolver.resolve(domain, "MX", lifetime=2)
+        servers = sorted(records, key=lambda r: r.preference)
 
     except dns.resolver.NXDOMAIN:
         return ("Likely to bounce", "bad",
@@ -147,22 +210,20 @@ def check_email(email):
 
     except dns.resolver.NoAnswer:
         return ("Unknown", "unknown",
-                "No MX record was found; mailbox delivery "
-                "could not be verified.")
+                "No MX record was found; delivery is unconfirmed.")
 
-    except (dns.exception.DNSException, OSError):
+    except (dns.exception.DNSException, OSError, ValueError):
         return ("Unknown", "unknown",
-                "The domain check failed or timed out.")
+                "The DNS check failed or timed out.")
 
     for record in servers[:2]:
         server = str(record.exchange).rstrip(".")
 
         try:
-            with smtplib.SMTP(server, 25, timeout=3) as smtp:
+            with smtplib.SMTP(server, 25, timeout=2) as smtp:
                 smtp.ehlo()
-
-                # Use an empty reverse-path; send no message.
                 code, _ = smtp.mail("")
+
                 if code != 250:
                     continue
 
@@ -174,15 +235,13 @@ def check_email(email):
                 if code in (250, 251):
                     return (
                         "Likely delivered", "good",
-                        "The mail server accepted the recipient "
-                        "check, but delivery is not guaranteed."
+                        "The server accepted the recipient check; "
+                        "actual delivery is not guaranteed."
                     )
 
-                if code == 550 and (
-                    "5.1.1" in message
-                    or "user unknown" in message
-                    or "mailbox unavailable" in message
-                ):
+                if code == 550 and any(term in message for term in (
+                    "5.1.1", "user unknown", "mailbox unavailable"
+                )):
                     return (
                         "Likely to bounce", "bad",
                         "The server reported that the mailbox "
@@ -194,8 +253,8 @@ def check_email(email):
 
     return (
         "Unknown", "unknown",
-        "The mail server did not provide a conclusive result "
-        "or the connection was unavailable."
+        "The server gave no conclusive result or the connection "
+        "was unavailable."
     )
 
 
@@ -208,26 +267,35 @@ def home():
     if request.method == "POST":
         input_text = request.form.get("emails", "")
 
-        emails = list(dict.fromkeys(
-            line.strip()
-            for line in input_text.splitlines()
-            if line.strip()
-        ))
-
-        if len(emails) > 20:
-            notice = (
-                "Please submit no more than 20 unique "
-                "email addresses at a time."
-            )
+        if len(input_text) > MAX_INPUT_LENGTH:
+            notice = "Input is too long. Please shorten your list."
         else:
-            for email in emails:
-                status, css, reason = check_email(email)
-                results.append({
-                    "email": email,
-                    "status": status,
-                    "css": css,
-                    "reason": reason
-                })
+            raw_emails = [
+                line.strip()
+                for line in input_text.splitlines()
+                if line.strip()
+            ]
+
+            emails = list(dict.fromkeys(raw_emails))
+
+            if not emails:
+                notice = "Please enter at least one email address."
+
+            elif len(emails) > MAX_EMAILS:
+                notice = (
+                    "Please submit no more than 20 unique "
+                    "email addresses at a time."
+                )
+
+            else:
+                for email in emails:
+                    status, css, reason = check_email(email)
+                    results.append({
+                        "email": email,
+                        "status": status,
+                        "css": css,
+                        "reason": reason
+                    })
 
     return render_template_string(
         PAGE,
@@ -244,6 +312,11 @@ def home():
             r["status"] == "Unknown" for r in results
         )
     )
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    return "Input is too large. Please submit a smaller list.", 413
 
 
 if __name__ == "__main__":
