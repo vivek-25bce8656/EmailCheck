@@ -463,7 +463,28 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
                 _DNS_CACHE[domain] = (now, result)
             return result
         except (dns.exception.DNSException, OSError, ValueError):
-            pass
+            result = {
+                "classification": CATEGORY_UNKNOWN,
+                "status": CATEGORY_UNKNOWN,
+                "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+                "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+                "dns_status": DNS_STATUS_ERROR,
+                "reason": "DNS resolution failed due to a temporary resolver or network error while querying host A records.",
+                "limitation": (
+                    "Temporary network or resolver error. Delivery outcome cannot be reliably determined "
+                    "under current network conditions."
+                ),
+                "mx_records": [],
+                "primary_mx": None,
+                "has_mx": False,
+                "has_fallback": False,
+            }
+            with _CACHE_LOCK:
+                while len(_DNS_CACHE) >= _DNS_CACHE_MAX_SIZE:
+                    oldest_key = next(iter(_DNS_CACHE))
+                    _DNS_CACHE.pop(oldest_key, None)
+                _DNS_CACHE[domain] = (now, result)
+            return result
 
         # If no A records, check AAAA (IPv6) host records under RFC 5321
         if not fallback_hosts:
@@ -496,7 +517,28 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
                     _DNS_CACHE[domain] = (now, result)
                 return result
             except (dns.exception.DNSException, OSError, ValueError):
-                pass
+                result = {
+                    "classification": CATEGORY_UNKNOWN,
+                    "status": CATEGORY_UNKNOWN,
+                    "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+                    "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+                    "dns_status": DNS_STATUS_ERROR,
+                    "reason": "DNS resolution failed due to a temporary resolver or network error while querying host AAAA records.",
+                    "limitation": (
+                        "Temporary network or resolver error. Delivery outcome cannot be reliably determined "
+                        "under current network conditions."
+                    ),
+                    "mx_records": [],
+                    "primary_mx": None,
+                    "has_mx": False,
+                    "has_fallback": False,
+                }
+                with _CACHE_LOCK:
+                    while len(_DNS_CACHE) >= _DNS_CACHE_MAX_SIZE:
+                        oldest_key = next(iter(_DNS_CACHE))
+                        _DNS_CACHE.pop(oldest_key, None)
+                    _DNS_CACHE[domain] = (now, result)
+                return result
 
         if fallback_hosts:
             result = {
@@ -565,6 +607,23 @@ def resolve_domain_mail_config(domain: str) -> Dict[str, Any]:
             "reason": "DNS check failed due to a temporary resolution or network error.",
             "limitation": (
                 "Temporary network or resolver error. This is not proof that the domain cannot receive email."
+            ),
+            "mx_records": [],
+            "primary_mx": None,
+            "has_mx": False,
+            "has_fallback": False,
+        }
+
+    except Exception:
+        result = {
+            "classification": CATEGORY_UNKNOWN,
+            "status": CATEGORY_UNKNOWN,
+            "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+            "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+            "dns_status": DNS_STATUS_ERROR,
+            "reason": "DNS check failed due to an unexpected system or resolution error.",
+            "limitation": (
+                "Temporary system or resolver error. This is not proof that the domain cannot receive email."
             ),
             "mx_records": [],
             "primary_mx": None,

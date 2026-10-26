@@ -906,7 +906,186 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             res2 = assess_batch(["user@retry-test.com"])
             self.assertEqual(res2[0]["classification"], CATEGORY_LIKELY_DELIVERED)
 
+    # 34. Deterministic Simulation: DNS Timeout & Resolver Failure -> Unknown
+    def test_deterministic_dns_timeout_and_resolver_failure_returns_unknown(self):
+        """
+        Verify that simulated DNS query timeouts, NoNameservers, or resolver network failures
+        strictly yield 'Unknown' rather than 'Likely delivered' or 'Likely to bounce'.
+        """
+        # Scenario A: Initial MX query times out
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            res_timeout = assess_email("service@dns-timeout-domain.com")
+            self.assertEqual(res_timeout["classification"], CATEGORY_UNKNOWN)
+            self.assertEqual(res_timeout["status"], CATEGORY_UNKNOWN)
+            self.assertNotEqual(res_timeout["classification"], CATEGORY_LIKELY_DELIVERED)
+            self.assertNotEqual(res_timeout["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(res_timeout["css"], "status-neutral")
+            self.assertEqual(res_timeout["badge"], "Unknown")
+            self.assertIn("timed out", res_timeout["reason"].lower())
+            self.assertFalse(res_timeout["is_deliverable_claim"])
+
+        clear_dns_cache()
+
+        # Scenario B: Initial MX query fails with NoNameservers (e.g. SERVFAIL / resolver error)
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NoNameservers()):
+            res_nonameservers = assess_email("ops@nonameservers-domain.com")
+            self.assertEqual(res_nonameservers["classification"], CATEGORY_UNKNOWN)
+            self.assertEqual(res_nonameservers["status"], CATEGORY_UNKNOWN)
+            self.assertNotEqual(res_nonameservers["classification"], CATEGORY_LIKELY_DELIVERED)
+            self.assertNotEqual(res_nonameservers["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(res_nonameservers["css"], "status-neutral")
+            self.assertIn("failed", res_nonameservers["reason"].lower())
+
+        clear_dns_cache()
+
+        # Scenario C: MX gives NoAnswer, but fallback host A query encounters resolver error
+        def mock_fallback_resolver_error(qname, rdtype, **kwargs):
+            if rdtype == "MX":
+                raise dns.resolver.NoAnswer()
+            elif rdtype in ("A", "AAAA"):
+                raise dns.resolver.NoNameservers()
+            raise dns.resolver.NXDOMAIN()
+
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_fallback_resolver_error):
+            res_fallback_err = assess_email("admin@fallback-error.com")
+            self.assertEqual(res_fallback_err["classification"], CATEGORY_UNKNOWN)
+            self.assertNotEqual(res_fallback_err["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertIn("temporary resolver or network error", res_fallback_err["reason"].lower())
+
+    # 35. Three-Category Strict Validation (Syntax Error -> Bounce, Evidence -> Delivered, Inconclusive -> Unknown)
+    def test_three_categories_strict_classification_and_evidence(self):
+        """
+        Verify the three primary categories:
+        1. Invalid syntax -> 'Likely to bounce'
+        2. Successful routing evidence -> 'Likely delivered' without claiming mailbox is verified
+        3. Inconclusive DNS / timeout -> 'Unknown'
+        Also confirms ordinary nonexistent domains remain 'Likely to bounce' and are not forced to Unknown.
+        """
+        # 1. Invalid Syntax -> Likely to bounce
+        syntax_cases = ["invalid..dots@syntax.org", "missing-at.com", "user@"]
+        for syn_email in syntax_cases:
+            res_syntax = assess_email(syn_email)
+            self.assertEqual(res_syntax["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertEqual(res_syntax["css"], "status-danger")
+            self.assertIn("invalid", res_syntax["reason"].lower())
+
+        # 2. Successful Routing Evidence -> Likely delivered (without confirming mailbox)
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.success-domain.com."
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            res_mx = assess_email("verified@success-domain.com")
+            self.assertEqual(res_mx["classification"], CATEGORY_LIKELY_DELIVERED)
+            self.assertEqual(res_mx["css"], "status-success")
+            self.assertFalse(res_mx["is_deliverable_claim"])
+            self.assertIn("individual mailbox existence cannot be confirmed", res_mx["limitation"].lower())
+
+        clear_dns_cache()
+
+        # 3. Inconclusive DNS Lookup / Timeout -> Unknown
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            res_unknown = assess_email("user@inconclusive-domain.com")
+            self.assertEqual(res_unknown["classification"], CATEGORY_UNKNOWN)
+            self.assertEqual(res_unknown["css"], "status-neutral")
+            self.assertFalse(res_unknown["is_deliverable_claim"])
+
+        clear_dns_cache()
+
+        # 4. Ordinary Nonexistent Domain (NXDOMAIN) -> Likely to bounce (NOT Unknown)
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            res_nx = assess_email("user@definitely-nonexistent-domain.xyz")
+            self.assertEqual(res_nx["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertNotEqual(res_nx["classification"], CATEGORY_UNKNOWN)
+            self.assertIn("does not exist in dns", res_nx["reason"].lower())
+
+    # 36. Unknown Count, Classification Filter, Result Table & CSV Export Representation
+    def test_unknown_representation_in_counts_filter_table_and_csv_export(self):
+        """
+        Verify that Unknown results are accurately represented in:
+        1. Summary card counter (id="statUnknown")
+        2. Granular diagnostic strip (id="diagUnverified")
+        3. Classification filter (<option value="Unknown">Unknown (1)</option>)
+        4. Result table (data-status="Unknown", status-neutral badge)
+        5. Retry action banner (id="retryBanner" and id="btnRetryUnknown")
+        6. CSV export (/export-csv) with proper classification and uncertainty limitation
+        7. Progressive JSON API
+        """
+        def mock_dns(qname, rdtype, **kwargs):
+            q = str(qname).lower()
+            if "delivered" in q:
+                mx_mock = MagicMock()
+                mx_mock.preference = 10
+                mx_mock.exchange = "mail.delivered-domain.com."
+                return [mx_mock]
+            elif "timeout" in q:
+                raise dns.exception.Timeout()
+            raise dns.resolver.NXDOMAIN()
+
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns):
+            payload = (
+                "user@delivered-domain.com\n"
+                "invalid..syntax@format.org\n"
+                "user@timeout-domain.com"
+            )
+
+            # Web Interface Verification
+            response = self.client.post("/", data={"emails": payload})
+            self.assertEqual(response.status_code, 200)
+            html = response.data.decode("utf-8")
+
+            # 1. Summary card count: statUnknown has 1
+            self.assertIn('id="statUnknown">1</div>', html)
+            self.assertIn('id="statLikelyDelivered">1</div>', html)
+            self.assertIn('id="statLikelyToBounce">1</div>', html)
+
+            # 2. Diagnostic pill: diagUnverified has 1
+            self.assertIn('id="diagUnverified">1</strong>', html)
+
+            # 3. Classification filter option: Unknown (1)
+            self.assertIn('<option value="Unknown">Unknown (1)</option>', html)
+
+            # 4. Result table row has data-status="Unknown"
+            self.assertIn('data-status="Unknown"', html)
+            self.assertIn('status-pill status-neutral', html)
+
+            # 5. Retry banner is rendered
+            self.assertIn('id="retryBanner"', html)
+            self.assertIn('id="btnRetryUnknown"', html)
+            self.assertIn('Retry Inconclusive (1)', html)
+
+            # 6. CSV Export Endpoint Verification
+            csv_resp = self.client.post("/export-csv", data={"emails": payload})
+            self.assertEqual(csv_resp.status_code, 200)
+            csv_text = csv_resp.data.decode("utf-8")
+            self.assertIn("user@timeout-domain.com", csv_text)
+            self.assertIn("Unknown", csv_text)
+            self.assertIn("DNS lookup timed out", csv_text)
+            self.assertIn("Temporary DNS timeout", csv_text)
+
+            # 7. Progressive JSON API Verification
+            json_resp = self.client.post(
+                "/",
+                data={"emails": payload},
+                headers={"Accept": "application/json"}
+            )
+            self.assertEqual(json_resp.status_code, 200)
+            json_data = json_resp.get_json()
+            self.assertEqual(json_data["metrics"]["unknown_count"], 1)
+            self.assertEqual(json_data["metrics"]["unverified_count"], 1)
+            self.assertEqual(json_data["metrics"]["likely_delivered_count"], 1)
+            self.assertEqual(json_data["metrics"]["likely_to_bounce_count"], 1)
+
+            # Result object check
+            unknown_item = next(
+                r for r in json_data["results"] if r["email"] == "user@timeout-domain.com"
+            )
+            self.assertEqual(unknown_item["classification"], "Unknown")
+            self.assertEqual(unknown_item["badge"], "Unknown")
+            self.assertEqual(unknown_item["css"], "status-neutral")
+            self.assertIn("timed out", unknown_item["reason"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
