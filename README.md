@@ -1,13 +1,13 @@
-# EmailCheck PRO | Evidence-Based Email Classification & DNS Verification
+# EmailCheck PRO | High-Throughput Email Intelligence & DNS Verification
 
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/framework-Flask-lightgrey.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-37%20passing%20%7C%2096%25%20coverage-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-44%20passing%20%7C%2096%25%20coverage-brightgreen.svg)]()
 [![Deployment](https://img.shields.io/badge/deployment-Render-46E3B7.svg)](https://emailcheck-5n2a.onrender.com/)
 
-> **ShieldNex Aerospace Software Development Internship Selection Task**  
-> *Evidence-based email syntax validation and DNS mail-routing assessment. Deterministically classifies email addresses into **Likely delivered**, **Likely to bounce**, and **Unknown** without invasive SMTP probing or privacy compromises.*
+> **ShieldNex Aerospace Software Development Internship Final Submission**  
+> *Evidence-based email syntax validation and DNS mail-routing assessment. Deterministically classifies email addresses into **Likely delivered**, **Likely to bounce**, and **Unknown** without invasive SMTP probing or privacy compromises. Supports high-throughput batching (100 default, 500 advanced limit) with bounded concurrency and thread-safe DNS caching.*
 
 - **Live Application:** [https://emailcheck-5n2a.onrender.com/](https://emailcheck-5n2a.onrender.com/)
 - **Source Repository:** [https://github.com/vivek-25bce8656/EmailCheck](https://github.com/vivek-25bce8656/EmailCheck)
@@ -18,33 +18,66 @@
 
 **EmailCheck PRO** is a production-ready, evidence-based email syntax and DNS mail-routing assessment platform built with Python, Flask, and `dnspython`.
 
-The application accepts batches of email addresses (formatted one per line or separated by commas) and evaluates them against RFC standards and observable DNS records. Each address is deterministically classified into one of three user-facing categories:
+The application accepts batches of email addresses (formatted one per line, comma-separated, or semicolon-separated) and evaluates them against RFC standards and observable DNS records. Each address is deterministically classified into one of three user-facing categories:
 
 1. **Likely delivered**
 2. **Likely to bounce**
 3. **Unknown**
 
 ### Delivery Disclaimer
-These classifications represent an **assessment of domain routing capability and syntax validity**, not an absolute guarantee of email delivery. EmailCheck does not claim that DNS records prove an individual mailbox exists, nor does it send test emails or execute invasive SMTP probing.
+These classifications represent an **assessment of domain routing capability and syntax validity**, not an absolute guarantee of individual mailbox existence. EmailCheck does not claim that DNS records prove an individual mailbox exists, nor does it send test emails or execute invasive SMTP probing.
 
 ---
 
 ## 2. Core Features & Technology Stack
 
 - **Backend Architecture:** Python 3.10+ / Flask / `dnspython` / Gunicorn (WSGI)
-- **Frontend Architecture:** Accessible HTML5, Vanilla CSS3 with CSS Custom Properties, and Vanilla JavaScript (Zero external JavaScript libraries or CSS frameworks)
+- **High-Throughput Batch Processing:**
+  - **Default Limit:** 100 unique email addresses per batch.
+  - **Optional Advanced Limit:** 500 unique email addresses per batch (selectable in UI).
+  - **Fixed Upper Bound:** Strict server-side ceiling at 500 addresses prevents parameter tampering or denial-of-service.
+- **Bounded Concurrency & DNS Optimization:**
+  - Addresses within a batch are grouped by domain to eliminate redundant lookups.
+  - Uncached domains are resolved concurrently via a bounded worker pool (`ThreadPoolExecutor`), maintaining sub-second to low-second response times.
+  - Thread-safe bounded in-memory cache (capacity: 2,500 entries) with TTL prevents duplicate network round-trips.
+- **Frontend Architecture:** Accessible HTML5, Vanilla CSS3 with CSS Custom Properties, and Vanilla JavaScript (Zero external JavaScript dependencies or CSS frameworks).
 - **Multi-Separator Input Support:** Accepts email addresses separated by newlines, commas, or semicolons, with automatic client-side and server-side whitespace trimming and duplicate filtering.
 - **Three-Tier Evidence-Based Classification:** Deterministic categorization into `Likely delivered`, `Likely to bounce`, and `Unknown`.
-- **RFC Syntax Validation:** Comprehensive RFC 5321 and RFC 5322 parsing covering address length, local-part format, dot-atom rules, sub-addressing (+tags), and Internationalized Domain Names (IDN/Punycode).
+- **Granular Diagnostic Reporting:** Real-time visibility into *Routing Configured*, *No Routing Detected*, *Domain Not Found (NXDOMAIN)*, *RFC 7505 Null MX*, *Invalid Format*, and *Unable to Verify*.
+- **Inconclusive Retry Mechanism:** Dedicated one-click action to re-evaluate inconclusive (Unknown) addresses without losing the original workbench input.
+- **RFC Syntax Validation:** Comprehensive RFC 5321 and RFC 5322 parsing covering address length, local-part format, dot-atom rules, sub-addressing (`+tags`), and Internationalized Domain Names (IDN/Punycode).
 - **Authoritative Mail Exchange (MX) Analysis:** Queries authoritative MX records, ranks exchangers by priority, and identifies primary mail gateways.
 - **RFC 7505 Null MX Detection:** Explicitly identifies domains that publish target `.` records declaring no email acceptance, ensuring implicit fallback routing is not erroneously applied.
 - **RFC 5321 Section 5.1 Host Fallback:** Checks IPv4 (A) and IPv6 (AAAA) records when no MX records are published.
-- **Spreadsheet Formula Injection Defense:** Neutralizes CSV injection vulnerabilities (`=`, `+`, `-`, `@`, `\t`, `\r`) with leading apostrophe shielding.
+- **Spreadsheet Formula Injection Defense:** Neutralizes CSV injection vulnerabilities (`=`, `+`, `-`, `@`, `\t`, `\r`) with leading apostrophe shielding across both client-side and server-side exports.
 - **Privacy & Security First:** In-memory request processing, zero application-level address persistence, and strict HTTP security headers (CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`).
 
 ---
 
-## 3. How Email Syntax is Checked
+## 3. Batch Limits & High-Throughput Processing Architecture
+
+### Batch Limit Configuration
+EmailCheck supports two verified batch processing tiers:
+1. **Default Maximum (100 unique addresses):** Intended for rapid routine list assessment.
+2. **Advanced Maximum (500 unique addresses):** Intended for larger campaign verification and analytical audits.
+
+The batch size limit is selectable directly in the user interface via a segmented control and is enforced consistently on both frontend and backend:
+
+```
+[ 100 Addresses (Default) ]   [ 500 Addresses (Advanced) ]
+```
+
+### High-Throughput Concurrency Model
+To safely process up to 500 addresses per batch within cloud deployment execution limits:
+1. **Pre-Evaluation Syntax Filtering:** All addresses are validated for syntax in memory (sub-millisecond). Syntax errors are classified immediately as `Likely to bounce` without consuming DNS resources.
+2. **Domain Grouping (Deduplication):** Valid addresses are grouped by unique domain. If 200 addresses in a batch share `@company.com`, only **one** DNS resolution is executed for `company.com`.
+3. **Thread-Safe DNS Cache Check:** Cached domain entries with valid TTL are retrieved instantly under a lock, bypassing network queries.
+4. **Bounded Worker Pool:** Uncached domains are resolved in parallel using `concurrent.futures.ThreadPoolExecutor(max_workers=16)`. The pool is bounded to prevent socket exhaustion and rate-limiting from authoritative DNS servers.
+5. **Deterministic Order Reconstruction:** Results are mapped back to their original submission indices, ensuring 100% preservation of input order.
+
+---
+
+## 4. How Email Syntax is Checked
 
 Email addresses are inspected using RFC 5321 and RFC 5322 specifications:
 
@@ -63,14 +96,14 @@ Email addresses are inspected using RFC 5321 and RFC 5322 specifications:
 4. **Domain Portion & IDN Handling:**
    - Domain must contain at least a host name and a valid Top-Level Domain (TLD). Purely numeric TLDs and single-label domains are rejected.
    - Domain labels cannot start or end with a hyphen.
-   - Internationalized Domain Names (IDN) with Unicode characters are safely normalized to ASCII Punycode via the Python `idna` codec (e.g. `user@münchen.de` &rarr; `user@xn--mnchen-3ya.de`).
+   - Internationalized Domain Names (IDN) with Unicode characters are safely normalized to ASCII Punycode via Python's `idna` codec (e.g. `user@münchen.de` &rarr; `user@xn--mnchen-3ya.de`).
    - IP literal domains (`[192.168.1.1]`) are flagged as unsupported for public mail exchange.
 
 Any address that fails syntax validation is classified as **Likely to bounce** with a specific technical explanation.
 
 ---
 
-## 4. DNS and Mail-Routing Assessment
+## 5. DNS and Mail-Routing Assessment
 
 For syntactically valid addresses, domain mail routing is evaluated in strict adherence to Internet standards:
 
@@ -111,7 +144,7 @@ A critical requirement of EmailCheck is never treating network disruptions as de
 
 ---
 
-## 5. The Exact Classification Rules
+## 6. Exact Classification Matrix
 
 | Classification | Technical Criteria & Evidence | User-Facing Explanation | Limitations & Disclaimers |
 | :--- | :--- | :--- | :--- |
@@ -121,7 +154,7 @@ A critical requirement of EmailCheck is never treating network disruptions as de
 
 ---
 
-## 6. What the Application Can and Cannot Establish
+## 7. What the Application Can and Cannot Establish
 
 ### What EmailCheck CAN Establish:
 - Whether an email address complies with RFC 5321 and RFC 5322 syntax specifications.
@@ -135,30 +168,36 @@ A critical requirement of EmailCheck is never treating network disruptions as de
 - **DNS records operate at the domain level, not the mailbox level.** A domain such as `google.com` or `microsoft.com` publishes valid MX records for the entire organization. DNS has no visibility into whether an individual mailbox (e.g. `definitely-fake-user-1234567@google.com`) actually exists.
 - **Mailbox existence is managed internally** by the recipient mail server's directory (LDAP, Active Directory, mail database).
 - **True deliverability depends on dynamic runtime factors:**
-  - Recipient mailbox existence and active status
-  - Mailbox storage quotas (over-quota mailboxes bounce)
-  - Receiving server spam filters, SPF/DKIM/DMARC policies, and greylisting
-  - Catch-all configurations (accepting all addresses regardless of existence)
+  - Recipient mailbox existence and active status.
+  - Mailbox storage quotas (over-quota mailboxes bounce).
+  - Receiving server spam filters, SPF/DKIM/DMARC policies, and greylisting.
+  - Catch-all configurations (accepting all addresses regardless of existence).
 - **Zero email transmission:** EmailCheck does not send emails to test addresses.
 
 ---
 
-## 7. Known Limitations of the Deployed Render Version
+## 8. Deployment Architecture & Hosting Environment Constraints
 
-1. **Cloud Network Restrictions (Outbound Port 25 Blocked):**
-   - In production on Render (as well as AWS, Google Cloud, DigitalOcean, and Heroku), outbound connections on **TCP port 25 are strictly blocked by cloud network firewall policies** to prevent spam relaying and abuse.
-   - Consequently, direct SMTP mailbox socket probes (e.g., connecting to port 25 to send `HELO`, `MAIL FROM`, and `RCPT TO` commands) cannot be performed in cloud environments.
-   - EmailCheck is purposefully architected to operate entirely via DNS lookups over UDP/TCP port 53, which function reliably in cloud hosting environments.
-2. **Inaccuracy of SMTP Mailbox Probing:**
-   - Even if port 25 were accessible, modern mail providers employ anti-harvesting defenses, catch-all addresses, and greylisting that make SMTP socket probing inaccurate and risk getting the server IP blocklisted.
-3. **DNS Query Latency & Timeouts:**
-   - DNS lookups are bounded by 2.5-second (MX) and 2.0-second (fallback) timeouts to avoid blocking web workers. Under high network congestion or slow authoritative nameservers, some queries may time out and be classified conservatively as **Unknown**.
-4. **Input Capacity Limits:**
-   - Maximum submission limit is 20 unique email addresses and 12,000 characters per request to maintain rapid sub-second response times.
+EmailCheck is deployed as a Web Service on Render:
+- **Build Command:** `pip install -r requirements.txt`
+- **Start Command:** `gunicorn app:app`
+- **Python Version:** Python 3.12+
+- **Live URL:** [https://emailcheck-5n2a.onrender.com/](https://emailcheck-5n2a.onrender.com/)
+
+### Cloud Network Restrictions (Outbound Port 25 Blocked)
+In production cloud environments (including Render, AWS, Google Cloud, DigitalOcean, and Heroku), outbound connections on **TCP port 25 are strictly blocked by cloud network firewall policies** to prevent spam relaying and abuse.
+- Consequently, direct SMTP mailbox socket probes (connecting to port 25 to send `HELO`, `MAIL FROM`, and `RCPT TO` commands) cannot be performed in cloud environments.
+- EmailCheck is purposefully architected to operate entirely via DNS lookups over UDP/TCP port 53, which function reliably in cloud hosting environments.
+
+### Render Free-Tier Cold Starts & HTTP 503 Behavior
+On Render's free tier, Web Services automatically spin down to 0 instances after 15 minutes of inactivity.
+- When an incoming request arrives while the service is dormant, Render's edge router initiates a cold boot of the container.
+- During container startup or during redeployments, requests can experience startup latency or return a transient **HTTP 503 Service Unavailable** while Gunicorn binds to `$PORT`.
+- Once booted, the application serves requests normally with `HTTP 200 OK` and `/health` returns `{"service":"EmailCheck","status":"healthy"}`.
 
 ---
 
-## 8. Local Installation & Execution
+## 9. Local Installation & Execution
 
 ### Prerequisites
 - Python 3.10, 3.11, or 3.12
@@ -197,28 +236,34 @@ Open your browser and navigate to `http://127.0.0.1:5000`.
 
 ---
 
-## 9. Automated Testing & Verification
+## 10. Automated Testing & Verification
 
-The automated test suite uses **100% mocked DNS responses** (`unittest.mock`), ensuring fast, deterministic, reproducible execution without external network dependencies or internet access.
+The automated test suite uses **100% mocked DNS responses** (`unittest.mock`), ensuring fast, deterministic, reproducible execution without external network dependencies.
 
 ### Running the Test Suite
 ```bash
-python -m unittest -v test_app.py
+python -m unittest test_app.py -v
+```
+
+### Measuring Statement Coverage
+```bash
+python -m coverage run -m unittest test_app.py
+python -m coverage report
 ```
 
 ### Verified Test Results
-- **Test Count:** **37 automated unit tests**
-- **Test Status:** **37 passing (100% success)**
-- **Statement Coverage:** **96% total coverage** (measured via `coverage.py`)
+- **Test Count:** **44 automated unit tests**
+- **Test Status:** **44 passing (100% success)**
+- **Statement Coverage:** **96% total coverage** across 1,000 statements
 
 ```
 Name               Stmts   Miss  Cover
 --------------------------------------
-app.py               121      3    98%
-email_checker.py     253     23    91%
-test_app.py          413      3    99%
+app.py               147      9    94%
+email_checker.py     299     26    91%
+test_app.py          554      4    99%
 --------------------------------------
-TOTAL                787     29    96%
+TOTAL               1000     39    96%
 ```
 
 ### Test Suite Coverage Breakdown:
@@ -230,32 +275,29 @@ TOTAL                787     29    96%
 6. **IDN / Punycode Normalization:** Automatic conversion of non-ASCII internationalized domain names.
 7. **Input Normalization & Deduplication:** Server-side deduplication preserving insertion order, handling leading/trailing whitespace.
 8. **Input Separator Parsing:** Support for comma-separated, semicolon-separated, and newline-separated inputs.
-9. **Capacity Guardrails:** Enforcing maximum 20 unique addresses and 12,000 character payload limits.
-10. **Authoritative MX Resolution:** Mocked MX priority ranking and primary server extraction.
-11. **RFC 7505 Null MX Handling:** Validating that domains with target `.` are classified as `Likely to bounce` and do not trigger fallback queries.
-12. **RFC 5321 Fallback Routing:** Verifying implicit mail routing via IPv4 (A) and IPv6 (AAAA) host records.
-13. **Confirmed Absence of Mail Routing:** Verifying `Likely to bounce` when domain exists but has no MX, A, or AAAA records.
-14. **DNS Timeouts & Resolver Failures:** Ensuring transient failures are classified as `Unknown` and never misclassified as bounces.
-15. **Three-Tier Classification Mapping:** Validating that every scenario maps strictly to `Likely delivered`, `Likely to bounce`, or `Unknown`.
-16. **Delivery Disclaimers:** Ensuring `is_deliverable_claim` is strictly `False` and limitation notices are present.
-17. **Mixed-Category Batch Processing:** Testing batches containing delivered, bounce, and unknown addresses simultaneously.
-18. **Domain Insights Aggregation:** Independent domain-level intelligence decoupled from individual address syntax errors.
-19. **Thread-Safe Bounded Caching:** Verifying cache hits and LRU eviction at maximum capacity (500 domains).
-20. **CSV Formula Injection Shielding:** Validating that `=SUM(...)`, `@evil.com`, `+cmd`, `-cmd`, `\t`, `\r` are escaped with leading apostrophes.
-21. **CSV Export Endpoint:** Proper MIME type (`text/csv`), UTF-8 BOM, and all evidence columns.
-22. **Health Check Endpoint:** Verifying `/health` returns JSON status, version, and UTC timestamp.
-23. **HTTP Error Handlers:** 400 Bad Request, 404 Not Found, 413 Payload Too Large, and 500 Internal Server Error.
-
----
-
-## 10. Production Deployment (Render)
-
-EmailCheck is deployed as a Web Service on Render:
-
-- **Build Command:** `pip install -r requirements.txt`
-- **Start Command:** `gunicorn app:app`
-- **Python Version:** Python 3.12+
-- **Live URL:** [https://emailcheck-5n2a.onrender.com/](https://emailcheck-5n2a.onrender.com/)
+9. **Default 100 Batch Limit:** Accepts 100 unique addresses, rejects 101.
+10. **Optional 500 Batch Limit:** Accepts 500 unique addresses when selected, rejects 501.
+11. **Batch Limit Tampering Protection:** Verifies that manipulated limits beyond 500 are capped at 500.
+12. **Payload Size Guardrails:** Enforcing maximum 150,000 character payload limits.
+13. **Authoritative MX Resolution:** Mocked MX priority ranking and primary server extraction.
+14. **RFC 7505 Null MX Handling:** Validating that domains with target `.` are classified as `Likely to bounce` and do not trigger fallback queries.
+15. **RFC 5321 Fallback Routing:** Verifying implicit mail routing via IPv4 (A) and IPv6 (AAAA) host records.
+16. **Confirmed Absence of Mail Routing:** Verifying `Likely to bounce` when domain exists but has no MX, A, or AAAA records.
+17. **DNS Timeouts & Resolver Failures:** Ensuring transient failures are classified as `Unknown` and never misclassified as bounces.
+18. **Three-Tier Classification Mapping:** Validating that every scenario maps strictly to `Likely delivered`, `Likely to bounce`, or `Unknown`.
+19. **Delivery Disclaimers:** Ensuring `is_deliverable_claim` is strictly `False` and limitation notices are present.
+20. **Mixed-Category Batch Processing:** Testing batches containing delivered, bounce, and unknown addresses simultaneously.
+21. **Domain Insights Aggregation:** Independent domain-level intelligence decoupled from individual address syntax errors.
+22. **Thread-Safe Bounded Caching:** Verifying cache hits and LRU eviction at maximum capacity (2,500 domains).
+23. **CSV Formula Injection Shielding:** Validating that `=SUM(...)`, `@evil.com`, `+cmd`, `-cmd`, `\t`, `\r` are escaped with leading apostrophes.
+24. **CSV Export Truncation & Limits:** Proper CSV export truncation at default 100 limit and advanced 500 limit.
+25. **Batch Domain Deduplication:** Verifying that 25 addresses with the same domain trigger only 1 DNS resolution.
+26. **Bounded Concurrency & Order Preservation:** Testing `assess_batch` with mixed records and strict order preservation.
+27. **500-Address Batch Stress & Accounting:** Verifying that 500 addresses process deterministically with zero omissions.
+28. **JSON / AJAX API Response:** Validating progressive enhancement endpoint with structured JSON metrics.
+29. **Inconclusive Retry Workflow:** Simulating re-evaluation of inconclusive addresses after network recovery.
+30. **Health Check Endpoint:** Verifying `/health` returns JSON status, version 3.0.0, and UTC timestamp.
+31. **HTTP Error Handlers:** 400 Bad Request, 404 Not Found, 413 Payload Too Large, and 500 Internal Server Error.
 
 ---
 
@@ -263,10 +305,20 @@ EmailCheck is deployed as a Web Service on Render:
 
 - **Spreadsheet Formula Injection Defense:** All user-controlled fields exported to CSV are protected against formula execution in Microsoft Excel, Google Sheets, and LibreOffice Calc.
 - **In-Memory Address Processing:** Submitted email addresses are processed in memory during request execution and are never written to internal databases or persisted to disk.
-- **No Spam or Probing:** Zero email delivery attempts and zero intrusive network handshakes.
+- **No Spam or Mailbox Probing:** Zero email delivery attempts and zero intrusive network handshakes.
 
 ---
 
-## 12. License
+## 12. Internship Submission Document Status
+
+Per the submission guidelines, the project workspace was inspected for a separate internship submission PDF or DOCX file:
+- **Status:** No PDF or DOCX submission document was present in the workspace root or repository.
+- **Working Links Verified:**
+  - Live Deployment: `https://emailcheck-5n2a.onrender.com/` (Active, HTTP 200 OK)
+  - GitHub Repository: `https://github.com/vivek-25bce8656/EmailCheck` (Active, tracked on `origin/main`)
+
+---
+
+## 13. License
 
 This project is licensed under the [MIT License](LICENSE).

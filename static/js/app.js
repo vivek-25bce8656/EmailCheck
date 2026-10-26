@@ -1,12 +1,17 @@
 /**
- * EmailCheck - Interactive Client Engine
- * Live input stats (newlines & commas), sample loader, search, filters (Likely delivered, Likely to bounce, Unknown), dynamic metrics, sorting, safe CSV export, and theme toggle.
+ * EmailCheck PRO - Interactive Client Engine
+ * High-throughput email batch processing (100 default / 500 advanced limit),
+ * live input statistics, interactive sample loader, inconclusive address retry,
+ * real-time search & classification filter, dynamic metrics, sorting,
+ * spreadsheet formula-injection safe CSV export, and persistent theme switcher.
  */
 
 (function () {
     "use strict";
 
-    const MAX_EMAILS = 20;
+    const DEFAULT_BATCH_LIMIT = 100;
+    const MAX_BATCH_LIMIT = 500;
+    let currentBatchLimit = DEFAULT_BATCH_LIMIT;
 
     // Theme Controller
     function initTheme() {
@@ -63,26 +68,109 @@
 
     // Helper: Split tokens by newlines, commas, or semicolons
     function parseTokens(rawText) {
-        if (!rawText) return [];
+        if (!rawText || typeof rawText !== "string") return [];
         return rawText
             .split(/[\r\n,;]+/)
             .map(t => t.trim())
             .filter(t => t.length > 0);
     }
 
-    // Input Workbench & Live Statistics
+    // Input Workbench, Batch Sizing, Progress & Live Statistics
     function initWorkbench() {
         const textarea = document.getElementById("emailTextarea");
         const uniqueCountEl = document.getElementById("uniqueCount");
         const remainingSlotsEl = document.getElementById("remainingSlots");
         const duplicateWarningEl = document.getElementById("duplicateWarning");
+        const duplicateCountNumEl = document.getElementById("duplicateCountNum");
+        const maxCapacityLabel = document.getElementById("maxCapacityLabel");
         const capacityFill = document.getElementById("capacityFill");
         const btnSubmit = document.getElementById("btnSubmit");
+        const submitBtnText = document.getElementById("submitBtnText");
         const checkForm = document.getElementById("checkForm");
         const btnSample = document.getElementById("btnSample");
         const btnClear = document.getElementById("btnClear");
+        const clientAlert = document.getElementById("clientAlert");
+        const clientAlertMessage = document.getElementById("clientAlertMessage");
+        const progressBar = document.getElementById("processingProgressBar");
+        const progressBarFill = document.getElementById("progressBarFill");
+        const progressStatusText = document.getElementById("progressStatusText");
+        const progressCountText = document.getElementById("progressCountText");
+
+        // Batch Limit Controls
+        const btnLimit100 = document.getElementById("btnLimit100");
+        const btnLimit500 = document.getElementById("btnLimit500");
+        const batchLimitInput = document.getElementById("batchLimitInput");
+        const serverExportForm = document.getElementById("serverExportForm");
 
         if (!textarea) return;
+
+        // Initialize current batch limit from hidden input
+        if (batchLimitInput && batchLimitInput.value) {
+            const parsed = parseInt(batchLimitInput.value, 10);
+            if (parsed === 500) {
+                currentBatchLimit = 500;
+            } else {
+                currentBatchLimit = 100;
+            }
+        }
+
+        function setBatchLimit(newLimit) {
+            currentBatchLimit = (newLimit === 500) ? 500 : 100;
+
+            if (batchLimitInput) batchLimitInput.value = currentBatchLimit;
+            if (maxCapacityLabel) maxCapacityLabel.textContent = currentBatchLimit;
+
+            // Sync with export form
+            if (serverExportForm) {
+                let exportLimitInput = serverExportForm.querySelector('input[name="batch_limit"]');
+                if (!exportLimitInput) {
+                    exportLimitInput = document.createElement("input");
+                    exportLimitInput.type = "hidden";
+                    exportLimitInput.name = "batch_limit";
+                    serverExportForm.appendChild(exportLimitInput);
+                }
+                exportLimitInput.value = currentBatchLimit;
+            }
+
+            // Update UI buttons state
+            if (btnLimit100 && btnLimit500) {
+                if (currentBatchLimit === 500) {
+                    btnLimit100.classList.remove("active");
+                    btnLimit100.setAttribute("aria-pressed", "false");
+                    btnLimit500.classList.add("active");
+                    btnLimit500.setAttribute("aria-pressed", "true");
+                } else {
+                    btnLimit500.classList.remove("active");
+                    btnLimit500.setAttribute("aria-pressed", "false");
+                    btnLimit100.classList.add("active");
+                    btnLimit100.setAttribute("aria-pressed", "true");
+                }
+            }
+
+            updateStats();
+            showToast(`Batch limit set to ${currentBatchLimit} addresses`);
+        }
+
+        if (btnLimit100) {
+            btnLimit100.addEventListener("click", () => setBatchLimit(100));
+        }
+        if (btnLimit500) {
+            btnLimit500.addEventListener("click", () => setBatchLimit(500));
+        }
+
+        function hideAlert() {
+            if (clientAlert) {
+                clientAlert.style.display = "none";
+                if (clientAlertMessage) clientAlertMessage.textContent = "";
+            }
+        }
+
+        function showAlert(msg) {
+            if (clientAlert && clientAlertMessage) {
+                clientAlertMessage.textContent = msg;
+                clientAlert.style.display = "flex";
+            }
+        }
 
         function updateStats() {
             const tokens = parseTokens(textarea.value);
@@ -90,15 +178,18 @@
             const uniqueSet = new Set(tokens);
             const uniqueCount = uniqueSet.size;
             const duplicates = totalTokens - uniqueCount;
-            const remaining = Math.max(0, MAX_EMAILS - uniqueCount);
+            const remaining = Math.max(0, currentBatchLimit - uniqueCount);
 
             if (uniqueCountEl) uniqueCountEl.textContent = uniqueCount;
             if (remainingSlotsEl) remainingSlotsEl.textContent = `${remaining} slots left`;
+            if (maxCapacityLabel) maxCapacityLabel.textContent = currentBatchLimit;
 
             // Duplicate warning badge
             if (duplicateWarningEl) {
                 if (duplicates > 0) {
-                    duplicateWarningEl.textContent = `${duplicates} duplicate${duplicates > 1 ? "s" : ""} filtered`;
+                    if (duplicateCountNumEl) {
+                        duplicateCountNumEl.textContent = duplicates;
+                    }
                     duplicateWarningEl.style.display = "inline-flex";
                 } else {
                     duplicateWarningEl.style.display = "none";
@@ -107,29 +198,31 @@
 
             // Capacity Fill Bar
             if (capacityFill) {
-                const percent = Math.min(100, (uniqueCount / MAX_EMAILS) * 100);
+                const percent = Math.min(100, (uniqueCount / currentBatchLimit) * 100);
                 capacityFill.style.width = `${percent}%`;
                 capacityFill.classList.remove("near-limit", "at-limit");
-                if (uniqueCount > MAX_EMAILS) {
+                if (uniqueCount > currentBatchLimit) {
                     capacityFill.classList.add("at-limit");
-                } else if (uniqueCount >= MAX_EMAILS * 0.8) {
+                } else if (uniqueCount >= currentBatchLimit * 0.8) {
                     capacityFill.classList.add("near-limit");
                 }
             }
 
             // Over-limit validation
-            if (uniqueCount > MAX_EMAILS) {
+            if (uniqueCount > currentBatchLimit) {
                 if (uniqueCountEl && uniqueCountEl.parentElement) {
                     uniqueCountEl.parentElement.classList.add("badge-danger");
                 }
+                showAlert(`Selected limit exceeded: ${uniqueCount} addresses entered. Limit is ${currentBatchLimit} (switch to 500 mode or remove ${uniqueCount - currentBatchLimit} addresses).`);
                 if (btnSubmit) {
                     btnSubmit.disabled = true;
-                    btnSubmit.title = `Maximum ${MAX_EMAILS} unique addresses allowed.`;
+                    btnSubmit.title = `Maximum ${currentBatchLimit} unique addresses allowed in this batch.`;
                 }
             } else {
                 if (uniqueCountEl && uniqueCountEl.parentElement) {
                     uniqueCountEl.parentElement.classList.remove("badge-danger");
                 }
+                hideAlert();
                 if (btnSubmit) {
                     btnSubmit.disabled = false;
                     btnSubmit.title = "";
@@ -140,20 +233,24 @@
         textarea.addEventListener("input", updateStats);
         updateStats(); // Initial execution
 
-        // Load Sample Data demonstrating all three outcomes
+        // Load Sample Data demonstrating diverse scenarios
         if (btnSample) {
             btnSample.addEventListener("click", () => {
                 const sampleBatch = [
                     "alex.developer@github.com",
                     "contact@cloudflare.com",
                     "engineering@google.com",
-                    "hello@nonexistent-domain-xyz987654.test",
-                    "invalid..dots@syntax-error.org",
-                    "missing-at-sign.com"
+                    "infrastructure@microsoft.com",
+                    "user@null-mx-test.example",
+                    "dev.team@nonexistent-domain-xyz987654.test",
+                    "invalid..consecutive.dots@syntax-error.org",
+                    "missing-at-sign.com",
+                    "user+subaddress@company.co.uk",
+                    "support@cloud-provider-test.net"
                 ];
                 textarea.value = sampleBatch.join("\n");
                 updateStats();
-                showToast("Loaded sample dataset (6 addresses)");
+                showToast(`Loaded sample dataset (${sampleBatch.length} diverse addresses)`);
                 textarea.focus();
             });
         }
@@ -162,30 +259,53 @@
         if (btnClear) {
             btnClear.addEventListener("click", () => {
                 textarea.value = "";
+                hideAlert();
                 updateStats();
                 textarea.focus();
             });
         }
 
-        // Form submit spinner & validation
+        // Form submit animation, progress simulation & client validation
         if (checkForm) {
             checkForm.addEventListener("submit", (e) => {
                 const tokens = parseTokens(textarea.value);
                 const uniqueSet = new Set(tokens);
-                if (uniqueSet.size === 0) {
+                const count = uniqueSet.size;
+
+                if (count === 0) {
                     e.preventDefault();
+                    showAlert("Please enter at least one email address to assess.");
                     showToast("Please enter at least one email address.");
                     textarea.focus();
                     return;
                 }
-                if (uniqueSet.size > MAX_EMAILS) {
+                if (count > currentBatchLimit) {
                     e.preventDefault();
-                    showToast(`Limit exceeded: Please enter up to ${MAX_EMAILS} addresses.`);
+                    showAlert(`Batch size of ${count} exceeds current limit of ${currentBatchLimit}. Select 500 Addresses or trim your list.`);
+                    showToast(`Limit exceeded: Please submit up to ${currentBatchLimit} addresses.`);
                     return;
+                }
+
+                // Show active progress indicator
+                if (progressBar) {
+                    progressBar.style.display = "block";
+                    if (progressCountText) {
+                        progressCountText.textContent = `Assessing ${count} addresses...`;
+                    }
+                    if (progressBarFill) {
+                        progressBarFill.style.width = "25%";
+                        setTimeout(() => {
+                            if (progressBarFill) progressBarFill.style.width = "65%";
+                        }, 400);
+                        setTimeout(() => {
+                            if (progressBarFill) progressBarFill.style.width = "90%";
+                        }, 1200);
+                    }
                 }
 
                 if (btnSubmit) {
                     btnSubmit.disabled = true;
+                    if (submitBtnText) submitBtnText.textContent = "Resolving Authoritative DNS...";
                     btnSubmit.innerHTML = `
                         <svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="12" y1="2" x2="12" y2="6"/>
@@ -197,16 +317,50 @@
                             <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
                             <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
                         </svg>
-                        <span>Assessing DNS Records...</span>
+                        <span>Assessing DNS Records (${count})...</span>
                     `;
                 }
             });
         }
     }
 
-    // Results Table: Search, Filter (3 Categories), Dynamic Metrics, Sorting, Copy, CSV
+    // Results Table: Search, Filter, Live Synchronized Metrics, Sorting, Copy, CSV & Retry
     function initResultsTable() {
         const table = document.getElementById("resultsTable");
+        const btnRetryUnknown = document.getElementById("btnRetryUnknown");
+        const textarea = document.getElementById("emailTextarea");
+        const checkForm = document.getElementById("checkForm");
+
+        // Handle Retry for Inconclusive (Unknown) assessments
+        if (btnRetryUnknown && textarea) {
+            btnRetryUnknown.addEventListener("click", () => {
+                const unknownRows = document.querySelectorAll('#resultsTable tbody tr[data-status="Unknown"]');
+                const unknownEmails = [];
+                unknownRows.forEach(r => {
+                    const em = r.dataset.email;
+                    if (em && !unknownEmails.includes(em)) {
+                        unknownEmails.push(em);
+                    }
+                });
+
+                if (unknownEmails.length === 0) {
+                    showToast("No inconclusive addresses found to retry.");
+                    return;
+                }
+
+                textarea.value = unknownEmails.join("\n");
+                const countBadge = document.getElementById("uniqueCount");
+                if (countBadge) countBadge.textContent = unknownEmails.length;
+
+                // Scroll smoothly to workbench
+                const workbench = document.getElementById("inputSectionTitle");
+                if (workbench) workbench.scrollIntoView({ behavior: "smooth" });
+
+                showToast(`Loaded ${unknownEmails.length} inconclusive address(es) for retry`);
+                textarea.focus();
+            });
+        }
+
         if (!table) return;
 
         const tbody = table.querySelector("tbody");
@@ -273,7 +427,7 @@
                 filteredCountBadge.textContent = `Showing ${visibleCount} of ${rows.length}`;
             }
 
-            // Dynamically synchronize summary card counts
+            // Dynamically synchronize summary card counts with current filter
             if (statUniqueEl) statUniqueEl.textContent = visibleCount;
             if (statLikelyDeliveredEl) statLikelyDeliveredEl.textContent = visibleLikelyDelivered;
             if (statLikelyToBounceEl) statLikelyToBounceEl.textContent = visibleLikelyToBounce;
@@ -285,7 +439,7 @@
                 if (!emptyRow) {
                     emptyRow = document.createElement("tr");
                     emptyRow.className = "empty-state-row";
-                    emptyRow.innerHTML = `<td colspan="8" class="empty-table-state">No matching email assessments found. Try refining your search or classification filter.</td>`;
+                    emptyRow.innerHTML = `<td colspan="8" class="empty-table-state" style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: 0.9rem;">No matching email assessments found. Try refining your search query or filter.</td>`;
                     tbody.appendChild(emptyRow);
                 }
                 emptyRow.style.display = "";

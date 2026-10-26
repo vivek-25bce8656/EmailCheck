@@ -9,6 +9,7 @@ Classifies each address into one of three user-facing categories:
 import re
 import time
 import threading
+import concurrent.futures
 from typing import Dict, List, Optional, Tuple, Any
 import dns.resolver
 import dns.exception
@@ -79,9 +80,14 @@ DOMAIN_LABEL_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
 )
 
+# Batch Processing Limits
+DEFAULT_BATCH_LIMIT = 100
+MAX_BATCH_LIMIT = 500
+ALLOWED_BATCH_LIMITS = (100, 500)
+
 # Thread-safe bounded in-memory DNS cache with TTL
 _DNS_CACHE: Dict[str, Tuple[float, Any]] = {}
-_DNS_CACHE_MAX_SIZE = 500
+_DNS_CACHE_MAX_SIZE = 2500
 _DNS_CACHE_TTL = 300  # seconds for valid resolution
 _DNS_CACHE_FAILURE_TTL = 15  # seconds for temporary errors/timeouts
 _CACHE_LOCK = threading.Lock()
@@ -626,6 +632,121 @@ def assess_email(email: str) -> Dict[str, Any]:
         "mx_records": dns_info.get("mx_records", []),
         "is_deliverable_claim": False,
     }
+
+
+def assess_batch(emails: List[str], max_workers: int = 16) -> List[Dict[str, Any]]:
+    """
+    Perform high-throughput, bounded concurrent assessments for a batch of email addresses.
+    1. Validates syntax for all addresses in memory.
+    2. Identifies unique domains among syntactically valid addresses to avoid duplicate queries.
+    3. Leverages thread-safe in-memory caching for domains resolved previously.
+    4. Concurrently resolves uncached unique domains using bounded worker threads.
+    5. Assembles and returns assessments in the strict original input order.
+    """
+    if not emails:
+        return []
+
+    results: List[Optional[Dict[str, Any]]] = [None] * len(emails)
+    valid_address_domain: Dict[int, Tuple[str, str]] = {}
+    domains_to_resolve: set = set()
+
+    # Step 1: Rapid syntax evaluation
+    for idx, raw_email in enumerate(emails):
+        clean_email = raw_email.strip() if isinstance(raw_email, str) else ""
+        is_valid, local_part, domain_part, syntax_error = validate_email_syntax(clean_email)
+
+        if not is_valid:
+            syntax_desc = syntax_error or "The email address format violates RFC standards."
+            results[idx] = {
+                "email": clean_email,
+                "classification": CATEGORY_LIKELY_TO_BOUNCE,
+                "status": CATEGORY_LIKELY_TO_BOUNCE,
+                "css": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["css"],
+                "badge": STATUS_BADGES[CATEGORY_LIKELY_TO_BOUNCE]["badge"],
+                "reason": f"Invalid email syntax: {syntax_desc}",
+                "syntax_status": f"Invalid syntax: {syntax_desc}",
+                "dns_status": DNS_STATUS_NOT_EVALUATED,
+                "limitation": "Malformed syntax causes mail servers and transfer agents to reject the address prior to delivery.",
+                "domain": domain_part or "N/A",
+                "primary_mx": "None",
+                "mx_records": [],
+                "is_deliverable_claim": False,
+            }
+        else:
+            valid_address_domain[idx] = (clean_email, domain_part)
+            domains_to_resolve.add(domain_part)
+
+    # Step 2: Concurrently resolve unique uncached domains with bounded worker pool
+    domain_results: Dict[str, Dict[str, Any]] = {}
+    now = time.time()
+
+    uncached_domains: List[str] = []
+    for dom in domains_to_resolve:
+        with _CACHE_LOCK:
+            if dom in _DNS_CACHE:
+                cached_time, cached_res = _DNS_CACHE[dom]
+                ttl = (
+                    _DNS_CACHE_TTL
+                    if cached_res.get("classification") != CATEGORY_UNKNOWN
+                    else _DNS_CACHE_FAILURE_TTL
+                )
+                if now - cached_time < ttl:
+                    domain_results[dom] = cached_res
+                    continue
+        uncached_domains.append(dom)
+
+    if uncached_domains:
+        effective_workers = min(len(uncached_domains), max(1, max_workers))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            future_to_dom = {
+                executor.submit(resolve_domain_mail_config, d): d
+                for d in uncached_domains
+            }
+            for fut in concurrent.futures.as_completed(future_to_dom):
+                dom_name = future_to_dom[fut]
+                try:
+                    domain_results[dom_name] = fut.result()
+                except Exception:
+                    domain_results[dom_name] = {
+                        "classification": CATEGORY_UNKNOWN,
+                        "status": CATEGORY_UNKNOWN,
+                        "css": STATUS_BADGES[CATEGORY_UNKNOWN]["css"],
+                        "badge": STATUS_BADGES[CATEGORY_UNKNOWN]["badge"],
+                        "dns_status": DNS_STATUS_ERROR,
+                        "reason": "DNS resolution failed due to an unexpected worker error.",
+                        "limitation": "Resolution inconclusive under current operating conditions.",
+                        "mx_records": [],
+                        "primary_mx": None,
+                        "has_mx": False,
+                        "has_fallback": False,
+                    }
+
+    # Step 3: Assemble results strictly in original input order
+    for idx, (clean_email, domain_part) in valid_address_domain.items():
+        dns_info = domain_results.get(domain_part)
+        if not dns_info:
+            dns_info = resolve_domain_mail_config(domain_part)
+
+        results[idx] = {
+            "email": clean_email,
+            "classification": dns_info["classification"],
+            "status": dns_info["status"],
+            "css": dns_info["css"],
+            "badge": dns_info["badge"],
+            "reason": dns_info["reason"],
+            "syntax_status": "Valid RFC syntax",
+            "dns_status": dns_info.get("dns_status", "N/A"),
+            "limitation": dns_info.get(
+                "limitation",
+                "DNS records confirm domain mail-routing capability only; individual mailbox existence cannot be proven without sending an email.",
+            ),
+            "domain": domain_part,
+            "primary_mx": dns_info.get("primary_mx") or "None",
+            "mx_records": dns_info.get("mx_records", []),
+            "is_deliverable_claim": False,
+        }
+
+    return results  # type: ignore[return-value]
 
 
 def aggregate_domain_insights(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

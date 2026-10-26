@@ -19,6 +19,7 @@ from email_checker import (
     validate_email_syntax,
     resolve_domain_mail_config,
     assess_email,
+    assess_batch,
     aggregate_domain_insights,
     sanitize_csv_value,
     clear_dns_cache,
@@ -39,6 +40,9 @@ from email_checker import (
     STATUS_DOMAIN_NOT_FOUND,
     STATUS_INVALID_FORMAT,
     STATUS_UNABLE_TO_VERIFY,
+    DEFAULT_BATCH_LIMIT,
+    MAX_BATCH_LIMIT,
+    ALLOWED_BATCH_LIMITS,
     _DNS_CACHE,
     _DNS_CACHE_MAX_SIZE,
 )
@@ -169,15 +173,70 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Please enter at least one email address.", response.data)
 
-    # 8. Max Limit & Oversized Requests
-    def test_more_than_20_unique_addresses_rejected(self):
-        emails = "\n".join(f"user{i}@example.com" for i in range(21))
-        response = self.client.post("/", data={"emails": emails})
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Please submit no more than 20 unique email addresses at a time.", response.data)
+    # 8. Max Limits & Configured Batch Guardrails (100 Default / 500 Advanced)
+    def test_default_100_unique_addresses_accepted_and_101_rejected(self):
+        """Default maximum is 100 unique addresses: accepts 100, rejects 101."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            # 100 addresses should succeed
+            emails_100 = "\n".join(f"user{i}@example.com" for i in range(100))
+            resp_100 = self.client.post("/", data={"emails": emails_100})
+            self.assertEqual(resp_100.status_code, 200)
+            self.assertNotIn(b"Please submit no more than", resp_100.data)
+            self.assertIn(b"user99@example.com", resp_100.data)
+
+            # 101 addresses should be rejected under default 100 limit
+            emails_101 = "\n".join(f"user{i}@example.com" for i in range(101))
+            resp_101 = self.client.post("/", data={"emails": emails_101})
+            self.assertEqual(resp_101.status_code, 200)
+            self.assertIn(b"Please submit no more than 100 unique email addresses at a time.", resp_101.data)
+
+    def test_optional_500_unique_addresses_accepted_and_501_rejected(self):
+        """Optional advanced maximum is 500 unique addresses: accepts 500, rejects 501."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            # 500 addresses with batch_limit=500 should succeed
+            emails_500 = "\n".join(f"user{i}@example.com" for i in range(500))
+            resp_500 = self.client.post("/", data={
+                "emails": emails_500,
+                "batch_limit": "500",
+            })
+            self.assertEqual(resp_500.status_code, 200)
+            self.assertNotIn(b"Please submit no more than", resp_500.data)
+            self.assertIn(b"user499@example.com", resp_500.data)
+
+            # 501 addresses should be rejected even with batch_limit=500
+            emails_501 = "\n".join(f"user{i}@example.com" for i in range(501))
+            resp_501 = self.client.post("/", data={
+                "emails": emails_501,
+                "batch_limit": "500",
+            })
+            self.assertEqual(resp_501.status_code, 200)
+            self.assertIn(b"Please submit no more than 500 unique email addresses at a time.", resp_501.data)
+
+    def test_batch_limit_tampering_capped_at_max(self):
+        """Users tampering with batch_limit beyond 500 are capped at 500."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.example.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            emails_501 = "\n".join(f"user{i}@example.com" for i in range(501))
+            resp = self.client.post("/", data={
+                "emails": emails_501,
+                "batch_limit": "99999",  # Tampered parameter
+            })
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b"Please submit no more than 500 unique email addresses at a time.", resp.data)
 
     def test_oversized_text_rejected(self):
-        huge_input = "a@b.com\n" * 2000  # > 12000 chars
+        huge_input = "a@b.com\n" * 25000  # 200,000 characters > 150,000 limit
         response = self.client.post("/", data={"emails": huge_input})
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Input is too long. Please shorten your list.", response.data)
@@ -348,13 +407,23 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             self.assertEqual(empty_resp.status_code, 200)
             self.assertIn("Email Address", empty_resp.data.decode("utf-8"))
 
-            # Test submission exceeding MAX_EMAILS (truncated)
-            many_emails = "\n".join(f"user{i}@test.com" for i in range(25))
+            # Test submission exceeding default batch limit (truncated at 100)
+            many_emails = "\n".join(f"user{i}@test.com" for i in range(120))
             many_resp = self.client.post("/export-csv", data={"emails": many_emails})
             self.assertEqual(many_resp.status_code, 200)
             lines = many_resp.data.decode("utf-8").strip().splitlines()
-            # 1 header line + 20 data lines = 21 lines
-            self.assertEqual(len(lines), 21)
+            # 1 header line + 100 data lines = 101 lines
+            self.assertEqual(len(lines), 101)
+
+            # Test submission with batch_limit=500 (accepts up to 500)
+            resp_500 = self.client.post("/export-csv", data={
+                "emails": many_emails,
+                "batch_limit": "500",
+            })
+            self.assertEqual(resp_500.status_code, 200)
+            lines_500 = resp_500.data.decode("utf-8").strip().splitlines()
+            # 1 header line + 120 data lines = 121 lines
+            self.assertEqual(len(lines_500), 121)
 
     # 14. Accurate Summary Counts & Execution Benchmark
     def test_accurate_summary_counts_and_benchmark(self):
@@ -680,6 +749,164 @@ class EmailCheckComprehensiveTests(unittest.TestCase):
             self.assertIn("beta@test.com", csv_content)
             self.assertIn("gamma@test.com", csv_content)
 
+    # 29. Batch Domain Resolution Avoids Repeated Lookups
+    def test_batch_resolution_avoids_repeated_domain_lookups(self):
+        """Within a batch, multiple email addresses sharing a domain trigger at most one DNS lookup."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.company.com."
+
+        mock_resolve = MagicMock(return_value=[mx_mock])
+        with patch("email_checker.dns.resolver.resolve", mock_resolve):
+            batch = [f"employee{i}@company.com" for i in range(25)]
+            results = assess_batch(batch)
+            self.assertEqual(len(results), 25)
+            # Exactly 1 DNS MX resolution call for company.com across all 25 addresses
+            self.assertEqual(mock_resolve.call_count, 1)
+            for res in results:
+                self.assertEqual(res["classification"], CATEGORY_LIKELY_DELIVERED)
+                self.assertEqual(res["domain"], "company.com")
+
+    # 30. Assess Batch Bounded Concurrency & Strict Order Preservation
+    def test_assess_batch_concurrent_processing_and_order_preservation(self):
+        """assess_batch correctly evaluates mixed scenarios and strictly preserves input ordering."""
+        def mock_dns_resolve(qname, rdtype, **kwargs):
+            q = str(qname).lower().rstrip(".")
+            if "valid-mx" in q:
+                mx_mock = MagicMock()
+                mx_mock.preference = 5
+                mx_mock.exchange = f"mx.{q}."
+                return [mx_mock]
+            elif "null-mx" in q:
+                null_mock = MagicMock()
+                null_mock.preference = 0
+                null_mock.exchange = "."
+                return [null_mock]
+            elif "fallback-host" in q:
+                if rdtype == "MX":
+                    raise dns.resolver.NoAnswer()
+                elif rdtype == "A":
+                    a_mock = MagicMock()
+                    a_mock.__str__ = lambda x: "1.2.3.4"
+                    return [a_mock]
+            elif "nxdomain" in q:
+                raise dns.resolver.NXDOMAIN()
+            elif "timeout" in q:
+                raise dns.exception.Timeout()
+            raise dns.resolver.NXDOMAIN()
+
+        with patch("email_checker.dns.resolver.resolve", side_effect=mock_dns_resolve):
+            input_list = [
+                "alpha@valid-mx-1.com",
+                "malformed..dots@invalid.syntax",
+                "beta@null-mx.org",
+                "gamma@fallback-host.net",
+                "delta@nxdomain-test.xyz",
+                "epsilon@timeout-domain.io",
+                "zeta@valid-mx-1.com",  # Repeated domain
+            ]
+            results = assess_batch(input_list)
+            self.assertEqual(len(results), len(input_list))
+
+            # Verify order preservation and exact classifications
+            self.assertEqual(results[0]["email"], "alpha@valid-mx-1.com")
+            self.assertEqual(results[0]["classification"], CATEGORY_LIKELY_DELIVERED)
+
+            self.assertEqual(results[1]["email"], "malformed..dots@invalid.syntax")
+            self.assertEqual(results[1]["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertIn("Invalid email syntax", results[1]["reason"])
+
+            self.assertEqual(results[2]["email"], "beta@null-mx.org")
+            self.assertEqual(results[2]["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+            self.assertIn("Null MX", results[2]["reason"])
+
+            self.assertEqual(results[3]["email"], "gamma@fallback-host.net")
+            self.assertEqual(results[3]["classification"], CATEGORY_LIKELY_DELIVERED)
+            self.assertIn("Implicit mail routing fallback", results[3]["reason"])
+
+            self.assertEqual(results[4]["email"], "delta@nxdomain-test.xyz")
+            self.assertEqual(results[4]["classification"], CATEGORY_LIKELY_TO_BOUNCE)
+
+            self.assertEqual(results[5]["email"], "epsilon@timeout-domain.io")
+            self.assertEqual(results[5]["classification"], CATEGORY_UNKNOWN)
+
+            self.assertEqual(results[6]["email"], "zeta@valid-mx-1.com")
+            self.assertEqual(results[6]["classification"], CATEGORY_LIKELY_DELIVERED)
+
+    # 31. 500-Address Batch Stress & Accounting Test
+    def test_assess_batch_500_addresses_stress_and_accounting(self):
+        """Verify that a full 500-address batch processes deterministically without omissions."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.large-scale-test.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            # 500 addresses across 10 shared domains + invalid syntax addresses
+            large_batch = []
+            for i in range(500):
+                if i % 50 == 0:
+                    large_batch.append(f"invalid..user{i}@badformat.com")
+                else:
+                    dom_id = i % 10
+                    large_batch.append(f"user{i}@cluster{dom_id}.domain.com")
+
+            self.assertEqual(len(large_batch), 500)
+            t_start = time.perf_counter()
+            results = assess_batch(large_batch, max_workers=16)
+            elapsed = time.perf_counter() - t_start
+
+            # Complete accounting: exactly 500 results returned
+            self.assertEqual(len(results), 500)
+            self.assertLess(elapsed, 5.0, "500-address assessment must complete within 5 seconds")
+
+            delivered = sum(r["classification"] == CATEGORY_LIKELY_DELIVERED for r in results)
+            bounces = sum(r["classification"] == CATEGORY_LIKELY_TO_BOUNCE for r in results)
+            # 10 invalid syntax addresses
+            self.assertEqual(bounces, 10)
+            self.assertEqual(delivered, 490)
+
+    # 32. JSON / AJAX API Endpoint Progressive Enhancement
+    def test_json_ajax_endpoint_response(self):
+        """The application returns structured JSON when requested via Accept: application/json."""
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.api-test.com."
+
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            resp = self.client.post(
+                "/",
+                data={"emails": "api.user1@api-test.com\napi.user2@api-test.com", "batch_limit": "100"},
+                headers={"Accept": "application/json"}
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.mimetype, "application/json")
+            data = resp.get_json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["unique_count"], 2)
+            self.assertEqual(len(data["results"]), 2)
+            self.assertIn("metrics", data)
+            self.assertEqual(data["metrics"]["likely_delivered_count"], 2)
+
+    # 33. Inconclusive Retry Workflow
+    def test_inconclusive_retry_flow(self):
+        """Simulate re-evaluating inconclusive (Unknown) addresses after network stabilizes."""
+        # Phase 1: DNS times out
+        with patch("email_checker.dns.resolver.resolve", side_effect=dns.exception.Timeout()):
+            res1 = assess_batch(["user@retry-test.com"])
+            self.assertEqual(res1[0]["classification"], CATEGORY_UNKNOWN)
+
+        # Clear cache to simulate re-query
+        clear_dns_cache()
+
+        # Phase 2: DNS recovers and resolves active MX
+        mx_mock = MagicMock()
+        mx_mock.preference = 10
+        mx_mock.exchange = "mail.recovered.com."
+        with patch("email_checker.dns.resolver.resolve", return_value=[mx_mock]):
+            res2 = assess_batch(["user@retry-test.com"])
+            self.assertEqual(res2[0]["classification"], CATEGORY_LIKELY_DELIVERED)
+
 
 if __name__ == "__main__":
     unittest.main()
+
