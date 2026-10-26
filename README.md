@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/framework-Flask-lightgrey.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-44%20passing%20%7C%2096%25%20coverage-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-47%20passing%20%7C%2096%25%20coverage-brightgreen.svg)]()
 [![Deployment](https://img.shields.io/badge/deployment-Render-46E3B7.svg)](https://emailcheck-5n2a.onrender.com/)
 
 > **ShieldNex Aerospace Software Development Internship Final Submission**  
@@ -252,52 +252,70 @@ python -m coverage report
 ```
 
 ### Verified Test Results
-- **Test Count:** **44 automated unit tests**
-- **Test Status:** **44 passing (100% success)**
-- **Statement Coverage:** **96% total coverage** across 1,000 statements
+- **Test Count:** **47 automated unit tests**
+- **Test Status:** **47 passing (100% success)**
+- **Statement Coverage:** **96% total coverage** across 1,119 statements
 
 ```
 Name               Stmts   Miss  Cover
 --------------------------------------
 app.py               147      9    94%
-email_checker.py     299     26    91%
-test_app.py          554      4    99%
+email_checker.py     313     34    89%
+test_app.py          659      5    99%
 --------------------------------------
-TOTAL               1000     39    96%
+TOTAL               1119     48    96%
 ```
 
 ### Test Suite Coverage Breakdown:
-1. **Homepage & Navigation:** Rendering, status code 200, branding, and sample data loading.
-2. **Security Headers:** Enforcement of CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy`.
-3. **Valid RFC Syntax:** Standard addresses, dots, hyphens, sub-addressing (+tags), and multi-level domains.
-4. **Invalid Syntax Detection:** Missing `@`, multiple `@`, whitespace, leading/trailing periods, consecutive periods, invalid TLDs, and IP literals.
-5. **Length Constraints:** RFC 5321 limits (local-part <= 64 chars, total address <= 254 chars).
-6. **IDN / Punycode Normalization:** Automatic conversion of non-ASCII internationalized domain names.
-7. **Input Normalization & Deduplication:** Server-side deduplication preserving insertion order, handling leading/trailing whitespace.
-8. **Input Separator Parsing:** Support for comma-separated, semicolon-separated, and newline-separated inputs.
-9. **Default 100 Batch Limit:** Accepts 100 unique addresses, rejects 101.
-10. **Optional 500 Batch Limit:** Accepts 500 unique addresses when selected, rejects 501.
-11. **Batch Limit Tampering Protection:** Verifies that manipulated limits beyond 500 are capped at 500.
-12. **Payload Size Guardrails:** Enforcing maximum 150,000 character payload limits.
-13. **Authoritative MX Resolution:** Mocked MX priority ranking and primary server extraction.
-14. **RFC 7505 Null MX Handling:** Validating that domains with target `.` are classified as `Likely to bounce` and do not trigger fallback queries.
-15. **RFC 5321 Fallback Routing:** Verifying implicit mail routing via IPv4 (A) and IPv6 (AAAA) host records.
-16. **Confirmed Absence of Mail Routing:** Verifying `Likely to bounce` when domain exists but has no MX, A, or AAAA records.
-17. **DNS Timeouts & Resolver Failures:** Ensuring transient failures are classified as `Unknown` and never misclassified as bounces.
-18. **Three-Tier Classification Mapping:** Validating that every scenario maps strictly to `Likely delivered`, `Likely to bounce`, or `Unknown`.
-19. **Delivery Disclaimers:** Ensuring `is_deliverable_claim` is strictly `False` and limitation notices are present.
-20. **Mixed-Category Batch Processing:** Testing batches containing delivered, bounce, and unknown addresses simultaneously.
-21. **Domain Insights Aggregation:** Independent domain-level intelligence decoupled from individual address syntax errors.
-22. **Thread-Safe Bounded Caching:** Verifying cache hits and LRU eviction at maximum capacity (2,500 domains).
-23. **CSV Formula Injection Shielding:** Validating that `=SUM(...)`, `@evil.com`, `+cmd`, `-cmd`, `\t`, `\r` are escaped with leading apostrophes.
-24. **CSV Export Truncation & Limits:** Proper CSV export truncation at default 100 limit and advanced 500 limit.
-25. **Batch Domain Deduplication:** Verifying that 25 addresses with the same domain trigger only 1 DNS resolution.
-26. **Bounded Concurrency & Order Preservation:** Testing `assess_batch` with mixed records and strict order preservation.
-27. **500-Address Batch Stress & Accounting:** Verifying that 500 addresses process deterministically with zero omissions.
-28. **JSON / AJAX API Response:** Validating progressive enhancement endpoint with structured JSON metrics.
-29. **Inconclusive Retry Workflow:** Simulating re-evaluation of inconclusive addresses after network recovery.
-30. **Health Check Endpoint:** Verifying `/health` returns JSON status, version 3.0.0, and UTC timestamp.
-31. **HTTP Error Handlers:** 400 Bad Request, 404 Not Found, 413 Payload Too Large, and 500 Internal Server Error.
+All 47 automated tests in `test_app.py` execute deterministically using mocked DNS responses:
+
+1. **Homepage & Navigation (`test_homepage_loads_successfully`):** HTTP 200, visual hierarchy, branding, and sample data population.
+2. **Security Headers (`test_security_headers_present`):** Strict CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy`.
+3. **Valid RFC Syntax (`test_valid_email_syntax`):** Standard addresses, dot-atom formatting, sub-addressing (+tags), and multi-level domains.
+4. **Invalid Syntax Detection (`test_invalid_email_syntax_variations`):** Missing `@`, multiple `@`, whitespace, leading/trailing periods, consecutive periods, invalid TLDs, and IP literals.
+5. **Type Safety (`test_validate_syntax_non_string_types`):** Graceful handling and rejection of `None`, integers, or non-string inputs.
+6. **Length Constraints (`test_maximum_email_and_local_part_lengths`):** RFC 5321 boundaries (local-part <= 64 chars, total address <= 254 chars).
+7. **IDN / Punycode Normalization (`test_idn_punycode_domain_handling`):** Conversion of Unicode internationalized domain names to ASCII Punycode.
+8. **Input Normalization & Deduplication (`test_duplicate_removal_preserving_order`):** Server-side deduplication preserving insertion order and whitespace trimming.
+9. **Empty & Whitespace Submissions (`test_empty_and_whitespace_submissions`):** Handling empty or whitespace-only submissions with clear user guidance.
+10. **Default 100 Batch Limit (`test_default_100_unique_addresses_accepted_and_101_rejected`):** Accepts 100 unique addresses, rejects 101 with explicit notice.
+11. **Optional 500 Batch Limit (`test_optional_500_unique_addresses_accepted_and_501_rejected`):** Accepts 500 unique addresses when selected, rejects 501.
+12. **Batch Limit Tampering Protection (`test_batch_limit_tampering_capped_at_max`):** Manipulated limits beyond 500 are strictly clamped at 500.
+13. **Payload Size Guardrails (`test_oversized_text_rejected`):** Enforcing maximum 150,000 character payload limits.
+14. **Authoritative MX Resolution (`test_domain_with_valid_mx_records`):** Mocked MX priority ranking and primary exchanger extraction.
+15. **RFC 5321 IPv4 Fallback Routing (`test_domain_no_mx_fallback_to_a_record`):** Implicit mail routing fallback via IPv4 (A) records when MX is absent.
+16. **RFC 5321 IPv6 Fallback Routing (`test_domain_no_mx_fallback_to_aaaa_record`):** Implicit mail routing fallback via IPv6 (AAAA) records when MX and A are absent.
+17. **Confirmed Absence of Mail Routing (`test_domain_no_mx_and_no_a_or_aaaa_record`):** Classifying as `Likely to bounce` when domain exists but has no MX, A, or AAAA records.
+18. **Fallback Timeout Handling (`test_fallback_timeout_handling`):** Ensuring DNS timeouts during fallback queries yield `Unknown`.
+19. **Nonexistent Domain Handling (`test_nonexistent_domain_nxdomain`):** DNS `NXDOMAIN` classified as `Likely to bounce`.
+20. **DNS Timeouts & Exceptions (`test_dns_timeout_and_exceptions`):** Ensuring transient MX lookup failures return `Unknown` instead of bounce.
+21. **Thread-Safe Bounded Caching (`test_dns_caching_and_cache_eviction`):** Cache hits bypass network; LRU eviction maintains 2,500 domain ceiling.
+22. **CSV Formula Injection Shielding (`test_csv_formula_injection_protection`):** Neutralizing `=`, `+`, `-`, `@`, `\t`, `\r` with leading single apostrophes.
+23. **CSV Export Endpoint (`test_csv_export_endpoint`):** Verifies CSV structure, headers, formula sanitization, and batch limit truncation (100 and 500).
+24. **Execution Time Benchmark & XSS Defense (`test_accurate_summary_counts_and_benchmark`):** HTML entity escaping and sub-second execution display.
+25. **Domain Insights Aggregation (`test_domain_insights_aggregation`):** Independent domain-level grouping and routing metadata.
+26. **Health Check Endpoint (`test_health_check`):** `/health` returns JSON status, version 3.0.0, and UTC timestamp.
+27. **HTTP Error Handlers (`test_http_error_handlers`):** 400 Bad Request, 404 Not Found, 413 Payload Too Large, and 500 Internal Server Error.
+28. **RFC 7505 Null MX Handling (`test_null_mx_record_handling`):** Validating target `.` records declare no email acceptance and classify as `Likely to bounce`.
+29. **Null MX Fallback Suppression (`test_null_mx_distinction_from_missing_mx`):** Ensuring Null MX never falls back to host A/AAAA records.
+30. **Domain Summary Independence (`test_mixed_valid_and_invalid_addresses_domain_summary_independence`):** Mixed valid and invalid addresses do not distort domain DNS assessment.
+31. **All-Invalid Syntax Domain Independence (`test_domain_summary_all_addresses_invalid_syntax`):** Independent DNS evaluation when all addresses fail syntax.
+32. **Valid Plus-Addressing Syntax (`test_valid_plus_addressing_syntax`):** Recognizing sub-addressing (`+tag`) in local parts.
+33. **Assessment Time Precision (`test_execution_time_formatting_precision`):** Formatting `< 1ms` instead of `0ms` for sub-millisecond execution.
+34. **Multi-Separator Input Parsing (`test_comma_and_semicolon_separated_input_parsing`):** Supports comma, semicolon, and newline-separated inputs.
+35. **Three-Tier Classification Mapping (`test_three_tier_classification_exact_categories`):** Validating that every scenario maps strictly to `Likely delivered`, `Likely to bounce`, or `Unknown`.
+36. **Mixed-Category Batch Processing (`test_batch_processing_mixed_three_categories`):** Testing batches containing delivered, bounce, and unknown addresses simultaneously.
+37. **Uncertainty Distinction (`test_uncertainty_is_never_classified_as_bounce`):** Transient resolver timeouts and errors are never classified as bounces.
+38. **Mailbox Delivery Disclaimer (`test_mailbox_existence_disclaimed_and_limitation_present`):** Ensuring `is_deliverable_claim` is strictly `False` and limitation notices are present.
+39. **CSV Export Separator Flexibility (`test_csv_export_with_comma_separated_submission`):** CSV export correctly processes comma-separated input lists.
+40. **Batch Domain Deduplication (`test_batch_resolution_avoids_repeated_domain_lookups`):** Verifies 25 addresses sharing a domain trigger only 1 DNS lookup.
+41. **Bounded Concurrency & Order Preservation (`test_assess_batch_concurrent_processing_and_order_preservation`):** `assess_batch` preserves exact input ordering under concurrent execution.
+42. **500-Address Batch Stress & Accounting (`test_assess_batch_500_addresses_stress_and_accounting`):** 500 addresses process deterministically with zero omissions.
+43. **Progressive JSON / AJAX API (`test_json_ajax_endpoint_response`):** Returns structured JSON metrics and result objects.
+44. **Inconclusive Retry Workflow (`test_inconclusive_retry_flow`):** Simulates re-evaluating inconclusive addresses after network recovery.
+45. **Deterministic Timeout & Resolver Failure (`test_deterministic_dns_timeout_and_resolver_failure_returns_unknown`):** Simulates `Timeout`, `NoNameservers`, and fallback host resolver errors yielding `Unknown`.
+46. **Three-Category Strict Validation (`test_three_categories_strict_classification_and_evidence`):** Verifies syntax failure -> bounce, routing evidence -> delivered without mailbox claim, DNS failure -> unknown, and NXDOMAIN -> bounce.
+47. **Unknown End-to-End Representation (`test_unknown_representation_in_counts_filter_table_and_csv_export`):** Verifies Unknown in summary card (`statUnknown`), diagnostic strip (`diagUnverified`), filter dropdown, result table, retry banner, `/export-csv`, and JSON API.
 
 ---
 
